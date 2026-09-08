@@ -1,0 +1,208 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "azurerm_resource_group.rg",
+      "mode": "managed",
+      "type": "azurerm_resource_group",
+      "name": "rg",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demo-rg",
+          "location": "brazilsouth",
+          "tags": {}
+        }
+      }
+    },
+    {
+      "address": "azurerm_storage_account.data",
+      "mode": "managed",
+      "type": "azurerm_storage_account",
+      "name": "data",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demodatastore001",
+          "location": "brazilsouth",
+          "account_tier": "Standard",
+          "account_replication_type": "LRS",
+          "access_tier": "Hot",
+          "https_traffic_only_enabled": false,
+          "min_tls_version": "TLS1_0",
+          "allow_nested_items_to_be_public": true,
+          "shared_access_key_enabled": true,
+          "public_network_access_enabled": true,
+          "versioning_enabled": false,
+          "network_rules": [
+            {
+              "default_action": "Allow",
+              "ip_rules": [],
+              "virtual_network_subnet_ids": []
+            }
+          ],
+          "tags": {
+            "dataclass": "archive"
+          }
+        }
+      }
+    },
+    {
+      "address": "azurerm_mssql_server.db",
+      "mode": "managed",
+      "type": "azurerm_mssql_server",
+      "name": "db",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demo-sql-server",
+          "location": "brazilsouth",
+          "version": "12.0",
+          "administrator_login": "sqladmin",
+          "administrator_login_password": "P@ssw0rd123!",
+          "minimum_tls_version": "1.0",
+          "public_network_access_enabled": true,
+          "backup_retention_days": 1,
+          "tags": {
+            "environment": "prod"
+          }
+        }
+      }
+    },
+    {
+      "address": "azurerm_mssql_firewall_rule.allow_all",
+      "mode": "managed",
+      "type": "azurerm_mssql_firewall_rule",
+      "name": "allow_all",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "allow-all",
+          "start_ip_address": "0.0.0.0",
+          "end_ip_address": "255.255.255.255"
+        }
+      }
+    },
+    {
+      "address": "azurerm_network_security_rule.ssh",
+      "mode": "managed",
+      "type": "azurerm_network_security_rule",
+      "name": "ssh",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "allow-ssh-any",
+          "priority": 100,
+          "direction": "Inbound",
+          "access": "Allow",
+          "protocol": "Tcp",
+          "source_port_range": "*",
+          "destination_port_range": "22",
+          "source_address_prefix": "*",
+          "destination_address_prefix": "*"
+        }
+      }
+    },
+    {
+      "address": "azurerm_linux_virtual_machine.app",
+      "mode": "managed",
+      "type": "azurerm_linux_virtual_machine",
+      "name": "app",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demo-vm",
+          "location": "brazilsouth",
+          "size": "Standard_D8s_v3",
+          "admin_username": "azureuser",
+          "admin_password": "SuperSecret#2026",
+          "disable_password_authentication": false,
+          "tags": {
+            "environment": "dev",
+            "owner": "team-a"
+          }
+        }
+      }
+    },
+    {
+      "address": "azurerm_role_assignment.app_owner",
+      "mode": "managed",
+      "type": "azurerm_role_assignment",
+      "name": "app_owner",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "scope": "/subscriptions/00000000-0000-0000-0000-000000000000",
+          "role_definition_name": "Owner",
+          "principal_id": "11111111-1111-1111-1111-111111111111"
+        }
+      }
+    },
+    {
+      "address": "azurerm_key_vault.kv",
+      "mode": "managed",
+      "type": "azurerm_key_vault",
+      "name": "kv",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demo-kv",
+          "location": "brazilsouth",
+          "sku_name": "standard",
+          "purge_protection_enabled": false,
+          "soft_delete_retention_days": 7,
+          "enable_rbac_authorization": false,
+          "public_network_access_enabled": true,
+          "access_policy": [
+            {
+              "key_permissions": ["Get", "List", "Create", "Delete", "Purge"],
+              "secret_permissions": ["Get", "List", "Set", "Delete", "Purge"]
+            }
+          ],
+          "tags": {
+            "environment": "prod",
+            "owner": "team-a",
+            "costcenter": "CC-1042"
+          }
+        }
+      }
+    },
+    {
+      "address": "azurerm_public_ip.edge",
+      "mode": "managed",
+      "type": "azurerm_public_ip",
+      "name": "edge",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demo-pip",
+          "location": "brazilsouth",
+          "allocation_method": "Static",
+          "sku": "Standard",
+          "tags": {
+            "environment": "dev"
+          }
+        }
+      }
+    }
+  ]
+}

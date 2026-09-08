@@ -1,0 +1,7 @@
+# Agent SecOps runtime + test dependencies.
+#
+# Deliberately minimal: the gate uses only the Python standard library plus
+# PyYAML. The LLM reasoner talks HTTP over urllib rather than pulling in a
+# vendor SDK, so a CI runner installs two packages and nothing else.
+PyYAML>=6.0
+pytest>=7.4

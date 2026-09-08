@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars and adjust. Every value here is chosen to keep the
+# Azure bill at or near zero for a student subscription.
+
+workload    = "secops"
+environment = "dev"           # "dev" keeps WAF-COST rules lenient
+location    = "centralindia"  # approved landing-zone region, cheap, low latency
+region_short = "cin"
+
+owner       = "your.name@vitstudent.ac.in"
+cost_center = "CC-1042"
+
+replication_type      = "LRS"  # cheapest; gate only demands ZRS for prod
+public_network_access = false  # free AND compliant; no private endpoint needed for the demo
+log_daily_quota_gb    = 0.1    # hard cap: workspace stays in the free tier

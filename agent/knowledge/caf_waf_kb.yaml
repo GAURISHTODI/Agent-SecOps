@@ -1,0 +1,141 @@
+# ---------------------------------------------------------------------
+# CAF / WAF knowledge base
+#
+# This file is the "documentation that was never turned into a rule".
+# The deterministic rule engine (agent/rules/) covers what can be checked
+# with an if-statement; this KB is what the reasoning layer reads when it
+# has to judge architectural intent that no rule encodes.
+#
+# Each entry is retrieved by canonical resource kind, so the reasoner is
+# only ever shown the handful of principles relevant to the resource in
+# front of it -- which is what keeps the LLM prompt (and its cost) small.
+# ---------------------------------------------------------------------
+version: 1
+source_frameworks:
+  caf: "Microsoft Cloud Adoption Framework for Azure - Govern & Landing Zone methodologies"
+  waf: "Microsoft Azure Well-Architected Framework - 5 pillars (+ Sustainability, AWS WAF)"
+
+pillars:
+  CAF:Governance:
+    question: "Is this change adopted the right way at portfolio level?"
+    principles:
+      - "Every resource carries ownership, environment and cost-attribution metadata."
+      - "Names follow a predictable convention so automation and billing can group resources."
+      - "Resource lifecycle (who deletes this, and when) is knowable from the resource itself."
+  CAF:LandingZone:
+    question: "Does the resource land inside the approved platform boundary?"
+    principles:
+      - "Workloads deploy only to approved regions for residency and latency commitments."
+      - "Data-tier services are reachable from the platform network, not the public internet."
+      - "Internet ingress arrives through shared, inspected platform edge services."
+      - "Subscription/project placement matches the workload's environment tier."
+  CAF:CostManagement:
+    question: "Is the spend this creates governed and attributable?"
+    principles:
+      - "Billable resources are attributable to a budget owner before provisioning."
+      - "Environments have budget alerts configured before workloads are deployed."
+      - "Right-sizing is decided at design time, not after the first invoice."
+  CAF:Identity:
+    question: "Is the authority granted the minimum required?"
+    principles:
+      - "No wildcard actions, no primitive Owner roles, no subscription-scoped Contributor."
+      - "Prefer managed identities and workload identity federation over static secrets."
+      - "Grants are scoped to the narrowest resource that satisfies the requirement."
+  WAF:Security:
+    question: "Is this resource built to resist compromise?"
+    principles:
+      - "Encrypt in transit (TLS 1.2+) and at rest; prefer customer-managed keys for regulated data."
+      - "Deny by default on the network; expose the minimum surface required."
+      - "Secrets come from a secret store at runtime, never from source or state."
+      - "Authentication is identity-based; disable shared keys and anonymous access."
+  WAF:Reliability:
+    question: "Will this survive the failures it is expected to survive?"
+    principles:
+      - "Production data survives the loss of a single datacentre (zone or geo redundancy)."
+      - "Every stateful service has a retained, restorable backup meeting its RPO."
+      - "Deletion of stateful resources is guarded against accident and automation error."
+      - "Single-instance compute is acceptable only where the workload tolerates downtime."
+  WAF:CostOptimization:
+    question: "Does this deliver its value at the lowest reasonable cost?"
+    principles:
+      - "SKU matches the environment: burstable/basic below production."
+      - "Always-on allocations are justified by always-on demand."
+      - "Prefer consumption/serverless tiers for spiky or low-volume workloads."
+  WAF:OperationalExcellence:
+    question: "Can we run, observe and recover this in production?"
+    principles:
+      - "Every component emits logs and metrics to a retained, queryable destination."
+      - "Alerting exists on the signals that indicate the workload is failing."
+      - "Changes are reproducible: no click-ops drift, no unpinned provider versions."
+  WAF:PerformanceEfficiency:
+    question: "Does capacity track demand?"
+    principles:
+      - "Capacity scales elastically rather than being permanently over-provisioned."
+      - "Data services are sized on measured throughput, not guesswork."
+      - "Caching and CDN are used where read patterns justify them."
+  WAF:Sustainability:
+    question: "Is the resource footprint proportionate to the value delivered?"
+    principles:
+      - "Cold data is tiered out of hot storage on a lifecycle policy."
+      - "Non-production capacity is shut down outside working hours."
+      - "Regions with lower carbon intensity are preferred where residency allows."
+
+# Retrieval index: canonical kind -> the pillars worth reasoning about.
+# The reasoner uses this to build a minimal, targeted prompt.
+kind_focus:
+  object_storage:
+    pillars: [WAF:Security, WAF:Reliability, CAF:Governance, WAF:Sustainability]
+    watch_for:
+      - "Shared access keys enabled when Entra ID / IAM auth would do."
+      - "Versioning or change feed disabled on a bucket holding irreplaceable data."
+      - "Blob container reachable from any network with no private endpoint."
+  compute_instance:
+    pillars: [WAF:Security, WAF:Reliability, WAF:CostOptimization]
+    watch_for:
+      - "Single instance with no availability set, zone or scale set."
+      - "Password authentication enabled instead of SSH keys or managed identity."
+      - "Unmanaged or unencrypted OS/data disks."
+  managed_database:
+    pillars: [WAF:Security, WAF:Reliability, CAF:LandingZone]
+    watch_for:
+      - "Public endpoint plus a permissive firewall rule (0.0.0.0 start address)."
+      - "No geo-redundant backup for a production-tagged database."
+      - "Administrator credentials supplied inline rather than from a secret store."
+  network_firewall:
+    pillars: [WAF:Security, CAF:LandingZone]
+    watch_for:
+      - "Any-to-any allow rule, or a rule with a very low priority number that shadows denies."
+      - "Management ports (22/3389) reachable from the internet without a bastion."
+  secret_store:
+    pillars: [WAF:Security, WAF:Reliability, CAF:Identity]
+    watch_for:
+      - "Access policies granting broad key/secret permissions to a wide principal."
+      - "Public network access left on for a vault holding production keys."
+  iam_binding:
+    pillars: [CAF:Identity]
+    watch_for:
+      - "Role scope broader than the resource the workload actually touches."
+      - "Human principals granted standing access where JIT elevation would fit."
+  container_platform:
+    pillars: [WAF:Security, WAF:Reliability, WAF:PerformanceEfficiency]
+    watch_for:
+      - "API server reachable from the public internet with no authorised IP range."
+      - "Single node pool spanning no availability zones."
+      - "RBAC or workload identity disabled."
+  app_hosting:
+    pillars: [WAF:Security, WAF:OperationalExcellence, WAF:CostOptimization]
+    watch_for:
+      - "HTTPS not enforced, or client certificates/auth disabled on a public app."
+      - "Connection strings held in app settings rather than Key Vault references."
+  network_public_ip:
+    pillars: [CAF:LandingZone, WAF:Security, WAF:CostOptimization]
+    watch_for:
+      - "Public IP attached directly to a workload NIC, bypassing the platform edge."
+  log_workspace:
+    pillars: [WAF:OperationalExcellence, WAF:CostOptimization]
+    watch_for:
+      - "Retention shorter than the compliance requirement, or unbounded daily quota."
+  resource_group:
+    pillars: [CAF:Governance, CAF:LandingZone]
+    watch_for:
+      - "Resource group created outside the approved region or without governance tags."

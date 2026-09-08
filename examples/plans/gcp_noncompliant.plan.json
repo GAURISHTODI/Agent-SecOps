@@ -1,0 +1,88 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "google_storage_bucket.data",
+      "mode": "managed",
+      "type": "google_storage_bucket",
+      "name": "data",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demo-data-bucket",
+          "location": "SOUTHAMERICA-EAST1",
+          "storage_class": "STANDARD",
+          "versioning_enabled": false,
+          "public_access_prevention": "inherited",
+          "labels": {
+            "environment": "prod"
+          }
+        }
+      }
+    },
+    {
+      "address": "google_compute_firewall.allow_ssh",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "allow_ssh",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "allow-ssh",
+          "direction": "INGRESS",
+          "source_ranges": ["0.0.0.0/0"],
+          "allow": [
+            {
+              "protocol": "tcp",
+              "ports": ["22", "3389"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "address": "google_sql_database_instance.main",
+      "mode": "managed",
+      "type": "google_sql_database_instance",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demo-sql",
+          "region": "southamerica-east1",
+          "database_version": "POSTGRES_15",
+          "deletion_protection": false,
+          "backup_retention_days": 0,
+          "root_password": "changeme123",
+          "password": "changeme123",
+          "labels": {
+            "environment": "dev"
+          }
+        }
+      }
+    },
+    {
+      "address": "google_project_iam_member.owner",
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "owner",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "demo-project",
+          "role": "roles/owner",
+          "member": "serviceAccount:app@demo-project.iam.gserviceaccount.com"
+        }
+      }
+    }
+  ]
+}

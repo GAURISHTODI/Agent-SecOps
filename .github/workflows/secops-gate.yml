@@ -1,0 +1,298 @@
+###############################################################################
+# Agent SecOps -- CAF/WAF compliance gate
+#
+# This workflow is the project's central claim expressed as YAML: the agent
+# runs BETWEEN `terraform plan` and `terraform apply`, and apply is reached
+# only if the gate returns pass.
+#
+#   plan -> show -json -> [ AGENT SECOPS GATE ] -> apply
+#                                 |
+#                                 +-- block: job fails, PR gets the report,
+#                                     nothing is ever provisioned
+#
+# COST: everything up to and including the gate runs on a free GitHub-hosted
+# runner and touches no Azure API, so opening a PR costs nothing. Only the
+# apply job (main branch, manual approval) talks to Azure.
+###############################################################################
+name: SecOps Gate
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - "examples/terraform/**"
+      - "policies/**"
+      - "agent/**"
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Run terraform apply after a passing gate"
+        type: boolean
+        default: false
+
+# OIDC federation: the pipeline gets a short-lived Azure token and no client
+# secret is ever stored in the repository. This is itself a CAF Identity
+# control -- the gate would flag a long-lived credential.
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+  security-events: write
+
+env:
+  TF_VERSION: "1.9.5"
+  PYTHON_VERSION: "3.11"
+  # Force the free reasoning layer in CI. Set this to azure_openai only in a
+  # manual run when you specifically want to demo LLM reasoning.
+  SECOPS_REASONER: offline
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 1. Agent self-test. If the gate's own tests fail, its verdicts mean
+  #    nothing, so nothing downstream is allowed to run.
+  # ---------------------------------------------------------------------
+  agent-tests:
+    name: Agent unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      - name: Publish rule catalogue to the job summary
+        run: |
+          echo "### Active rule catalogue" >> $GITHUB_STEP_SUMMARY
+          python -m agent.cli rules --format markdown >> $GITHUB_STEP_SUMMARY
+
+  # ---------------------------------------------------------------------
+  # 2. Plan + gate. This is the job the project is about.
+  # ---------------------------------------------------------------------
+  plan-and-gate:
+    name: Terraform plan + CAF/WAF gate
+    needs: agent-tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both directories are planned on every PR: the compliant module must
+        # keep passing (no regressions in the module) and the seeded module
+        # must keep being blocked (no regressions in the gate).
+        include:
+          - name: compliant-workload
+            dir: infra/demo
+            expect: pass
+          - name: seeded-misconfigurations
+            dir: examples/terraform/noncompliant
+            expect: block
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # Azure login is needed only for the module with a real backend. The
+      # seeded module has no backend and is planned entirely offline.
+      - name: Azure login (OIDC, no stored secret)
+        if: matrix.dir == 'infra/demo'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform init
+        working-directory: ${{ matrix.dir }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [ "${{ matrix.dir }}" = "infra/demo" ]; then
+            terraform init -input=false \
+              -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
+              -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
+              -backend-config="container_name=tfstate" \
+              -backend-config="key=demo.tfstate" \
+              -backend-config="use_oidc=true"
+          else
+            terraform init -input=false -backend=false
+          fi
+
+      - name: Terraform validate
+        working-directory: ${{ matrix.dir }}
+        run: terraform validate
+
+      # ---- the interception point ----------------------------------
+      - name: Terraform plan
+        id: plan
+        working-directory: ${{ matrix.dir }}
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          # -refresh=false keeps the plan from making avoidable Azure API
+          # calls; it is faster and avoids touching the subscription at all
+          # on a pure policy change.
+          terraform plan -out=tf.plan -input=false -refresh=false
+          terraform show -json tf.plan > plan.json
+          echo "resources=$(jq '.resource_changes | length' plan.json)" >> $GITHUB_OUTPUT
+
+      - name: Agent SecOps gate
+        id: gate
+        continue-on-error: true   # we want the report published even on a block
+        env:
+          # Present only when the org has opted into LLM reasoning; when they
+          # are absent the agent falls back to the free offline reasoner.
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}
+        run: |
+          python -m agent.cli evaluate \
+            --plan ${{ matrix.dir }}/plan.json \
+            --policy policies/policy.yaml \
+            --markdown gate-report.md \
+            --json gate-report.json \
+            --sarif gate-report.sarif
+
+      - name: Upload gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-report-${{ matrix.name }}
+          path: |
+            gate-report.md
+            gate-report.json
+            gate-report.sarif
+          retention-days: 7   # short retention: artifact storage is billable
+
+      - name: Publish findings to the Security tab
+        if: always() && matrix.dir == 'infra/demo'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gate-report.sarif
+          category: agent-secops
+
+      - name: Comment the compliance report on the PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('gate-report.md', 'utf8');
+            const marker = '<!-- agent-secops:${{ matrix.name }} -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            // Update the existing comment instead of adding a new one on
+            // every push, so the PR stays readable across many commits.
+            const comments = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = comments.data.find(c => c.body.includes(marker));
+            const payload = `${marker}\n### \`${{ matrix.dir }}\`\n\n${body}`;
+
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: mine.id, body: payload,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body: payload,
+              });
+            }
+
+      # The gate's exit code is the pipeline decision. This step also asserts
+      # the *expected* verdict, so the seeded module failing to be blocked is
+      # itself a build failure -- that is the regression test for the gate.
+      - name: Enforce the verdict
+        run: |
+          VERDICT=$(jq -r .verdict gate-report.json)
+          echo "Gate verdict: $VERDICT (expected: ${{ matrix.expect }})"
+
+          if [ "${{ matrix.expect }}" = "block" ]; then
+            if [ "$VERDICT" != "block" ]; then
+              echo "::error::Seeded misconfigurations were NOT blocked. The gate has regressed."
+              exit 1
+            fi
+            echo "::notice::Seeded misconfigurations correctly blocked before apply."
+            exit 0
+          fi
+
+          if [ "$VERDICT" = "block" ]; then
+            echo "::error::Compliance gate blocked this deployment. See the PR report."
+            exit 1
+          fi
+          echo "::notice::Gate passed -- deployment may proceed."
+
+  # ---------------------------------------------------------------------
+  # 3. Apply. Only reachable when the gate passed, only on main, and only
+  #    behind a protected environment that requires manual approval --
+  #    a second human control on top of the automated one.
+  # ---------------------------------------------------------------------
+  apply:
+    name: Terraform apply
+    needs: plan-and-gate
+    if: |
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || inputs.apply)
+    runs-on: ubuntu-latest
+    environment: production   # configure a required reviewer on this environment
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Terraform apply
+        working-directory: infra/demo
+        env:
+          ARM_USE_OIDC: "true"
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RG }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_SA }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=demo.tfstate" \
+            -backend-config="use_oidc=true"
+          terraform apply -auto-approve -input=false
+
+      - name: Report deployed footprint
+        working-directory: infra/demo
+        run: |
+          echo "### Deployed (post-gate)" >> $GITHUB_STEP_SUMMARY
+          terraform output -json | jq -r 'to_entries[] | "- **\(.key)**: \(.value.value)"' \
+            >> $GITHUB_STEP_SUMMARY

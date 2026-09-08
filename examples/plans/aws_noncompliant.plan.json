@@ -1,0 +1,96 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket.data",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "data",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "bucket": "demo-data-bucket",
+          "region": "sa-east-1",
+          "acl": "public-read",
+          "versioning_enabled": false,
+          "tags": {
+            "environment": "prod"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_security_group.web",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "web",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "web-sg",
+          "description": "web tier",
+          "ingress": [
+            {
+              "from_port": 22,
+              "to_port": 22,
+              "protocol": "tcp",
+              "cidr_blocks": ["0.0.0.0/0"]
+            },
+            {
+              "from_port": 5432,
+              "to_port": 5432,
+              "protocol": "tcp",
+              "cidr_blocks": ["0.0.0.0/0"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "address": "aws_db_instance.main",
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "identifier": "demo-db",
+          "region": "sa-east-1",
+          "instance_class": "db.m5.2xlarge",
+          "engine": "postgres",
+          "username": "dbadmin",
+          "password": "Sup3rSecret!",
+          "backup_retention_period": 0,
+          "skip_final_snapshot": true,
+          "publicly_accessible": true,
+          "tags": {
+            "environment": "dev",
+            "owner": "team-b"
+          }
+        }
+      }
+    },
+    {
+      "address": "aws_iam_role_policy.admin",
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "admin",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "admin-policy",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\": \"Allow\",\"Action\": \"*\",\"Resource\":\"*\"}]}"
+        }
+      }
+    }
+  ]
+}

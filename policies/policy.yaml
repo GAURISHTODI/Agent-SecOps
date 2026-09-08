@@ -1,0 +1,89 @@
+# ---------------------------------------------------------------------
+# Agent SecOps organisational policy
+#
+# This is the only file a platform team should need to edit. It tunes the
+# gate without touching Python: what severity blocks a build, which rules
+# apply, what the org's tags/regions actually are, and which findings are
+# consciously accepted (with an expiry date).
+# ---------------------------------------------------------------------
+
+thresholds:
+  # A finding at or above this severity stops the pipeline.
+  block_at: high
+  # At or above this severity the build is marked "remediate" (warn).
+  remediate_at: medium
+  # Should an LLM-reasoned finding be allowed to fail a build?
+  # Default false: the reasoning layer is advisory, so an unpredictable
+  # model can never block a deployment. Flip to true once the team has
+  # measured its precision on the seeded test set.
+  fail_on_reasoner_findings: false
+
+reasoner:
+  # offline        - free, deterministic heuristics (default; use in CI)
+  # azure_openai   - Azure OpenAI deployment (needs endpoint + key env vars)
+  # anthropic      - Anthropic Messages API (needs ANTHROPIC_API_KEY)
+  # none           - deterministic rules only
+  provider: offline
+  model: gpt-4o-mini          # cheapest capable model; do not use a large model here
+  enabled: true
+  max_resources: 12           # hard cap on resources sent to the model per run
+  max_output_tokens: 900
+  temperature: 0.0            # determinism matters for a build gate
+  min_confidence: 0.6         # drop low-confidence model output as noise
+  cache_dir: .secops_cache    # identical plans are never re-billed
+
+rules:
+  # --- organisation-specific values --------------------------------
+  CAF-GOV-001:
+    enabled: true
+    params:
+      required: [owner, environment, costcenter]
+
+  CAF-GOV-002:
+    enabled: true
+    severity: low
+    params:
+      pattern: "^[a-z0-9]+-(dev|test|stage|prod)-[a-z0-9]+(-[a-z0-9]+)*$"
+      exempt_kinds: [object_storage, network_firewall, iam_binding, other]
+
+  CAF-LZ-001:
+    enabled: true
+    params:
+      # Keep this list tight: it is also a cost control, because it stops
+      # anyone accidentally deploying into an expensive or distant region.
+      approved: [centralindia, southindia, eastus]
+
+  CAF-COST-001:
+    params:
+      tag: costcenter
+
+  CAF-IAM-001:
+    severity: critical
+    params:
+      forbidden_roles: [Owner, Contributor, User Access Administrator]
+
+  WAF-SEC-002:
+    params:
+      minimum: 1.2
+
+  WAF-SEC-004:
+    params:
+      sensitive_ports: [22, 3389, 3306, 5432, 1433, 27017, 6379]
+
+  WAF-REL-002:
+    params:
+      minimum_days: 7
+
+  # Customer-managed keys are a paid Key Vault feature; for a student
+  # subscription this is reported as guidance rather than a blocker.
+  WAF-SEC-005:
+    severity: low
+
+waivers:
+  # Every exception is explicit, attributed and time-boxed. An expired
+  # waiver stops suppressing its finding and is called out in the report,
+  # so "temporary" exceptions cannot quietly become permanent.
+  - rule_id: CAF-GOV-002
+    resource: "azurerm_storage_account.tfstate"
+    reason: "Terraform backend storage predates the naming standard; migration tracked in PROJ-114."
+    expires: "2026-12-31"

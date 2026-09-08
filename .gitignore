@@ -1,0 +1,27 @@
+# --- Terraform ---
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+tf.plan
+plan.json
+terraform.tfvars          # may contain subscription-specific values
+crash.log
+
+# --- Agent ---
+.secops_cache/            # LLM response cache
+out/
+gate-report.*
+*.sarif
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# --- Local/editor ---
+.vscode/
+.idea/
+.env
