@@ -5,11 +5,13 @@
 *.tfstate.*
 tf.plan
 plan.json
-terraform.tfvars          # may contain subscription-specific values
+# may contain subscription-specific values
+terraform.tfvars
 crash.log
 
 # --- Agent ---
-.secops_cache/            # LLM response cache
+# LLM response cache
+.secops_cache/
 out/
 gate-report.*
 *.sarif

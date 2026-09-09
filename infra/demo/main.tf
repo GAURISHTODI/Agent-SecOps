@@ -39,6 +39,14 @@ provider "azurerm" {
   # Authentication comes from GitHub OIDC in CI (no client secret stored) and
   # from `az login` locally.
   use_oidc = var.use_oidc
+
+  # The storage account below sets shared_access_key_enabled = false (WAF
+  # Security: no shared keys). Without this flag the provider still tries to
+  # read queue/table properties using an account key when refreshing state,
+  # which now returns 403 Key based authentication is not permitted. Forcing
+  # Azure AD auth for the provider's own management calls keeps that read
+  # working without reopening key-based access.
+  storage_use_azuread = true
 }
 
 locals {

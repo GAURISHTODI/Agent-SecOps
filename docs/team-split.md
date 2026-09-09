@@ -1,286 +1,124 @@
-# Team Split — Three-Way Ownership
+# Team Split — Contribution Breakdown
 
 Project ID 19727UG01 · Agent SecOps · Guide: Dr. SM Farooq
 
-The work divides into three modules with clean seams. Two are **self-contained and precisely explainable** — you can present them completely without needing to reason about the rest of the system. The third carries the **architectural and research narrative** and needs the full context, because it is the part that answers "why is this a project and not a script?"
+Weighted by scope and complexity, not by file count alone:
 
-| | Owner | Module | Nature |
+| Weight | Owner | Area | What it covers |
 |---|---|---|---|
-| **A** | **Akshat Gupta** | Plan ingestion + deterministic CAF/WAF rule engine | Self-contained, precise |
-| **B** | **Bhumika Singh** | CI/CD pipeline, Terraform, Azure integration, reporting | Self-contained, precise |
-| **C** | **Gaurish Todi** | Reasoning layer, policy/verdict engine, evaluation, architecture | Full context, integrative |
+| **Major** | **Gaurish Todi** | AI reasoning engine, orchestration, evaluation, dashboard | The core intelligence of the project and how its results are measured and shown |
+| **Medium** | **Akshat Gupta** | Plan parsing + deterministic rule engine | Turning a Terraform plan into 22 concrete CAF/WAF checks |
+| **Light** | **Bhumika Singh** | CI/CD pipeline, Terraform infra, Azure setup, CLI/reporting | Wiring the engine into a real pipeline and a real (cheap) Azure deployment |
 
 ---
 
-# Module A — Akshat Gupta
-## Plan Ingestion and the Deterministic Rule Engine
+# Gaurish Todi — Major Contribution
+## The AI Reasoning Engine, Orchestration, Evaluation & Dashboard
 
-### What you own
+This is the intellectual core of the project: the part that goes beyond "check a list of rules" into "reason about guidance that was never written as a rule," plus the machinery that turns that reasoning into a verdict, measures how well it works, and shows it on screen.
 
-| File | What it does |
+### Files and folders owned
+
+| Path | What it is |
 |---|---|
-| `agent/models.py` | The data model: `Resource`, `Finding`, `Pillar`, `Severity`, `Verdict` |
-| `agent/plan_parser.py` | Terraform plan JSON → normalized, cloud-agnostic resources |
-| `agent/rules/base.py` | Rule base class and registry |
-| `agent/rules/caf.py` | 7 CAF rules — governance, landing zone, cost, identity |
-| `agent/rules/waf.py` | 15 WAF rules — all six pillars |
-| `tests/test_plan_parser.py`, `tests/test_rules.py` | 45 of the 63 tests |
+| `agent/engine.py` | The orchestrator — runs Layer 1 (rules) → Layer 2 (reasoning) → Layer 3 (policy), produces the final verdict |
+| `agent/config.py` | The policy engine — thresholds, rule overrides, time-boxed waivers |
+| `agent/reasoner/base.py` | Shared retrieval logic: pulls only the relevant CAF/WAF guidance for a resource |
+| `agent/reasoner/offline.py` | The free, deterministic reasoning layer — 12 heuristic probes, the CI default |
+| `agent/reasoner/llm.py` | The paid LLM reasoning layer (Azure OpenAI / Anthropic), with cost caps and caching |
+| `agent/reasoner/__init__.py` | Reasoner selection with automatic fallback if no LLM is configured |
+| `agent/knowledge/caf_waf_kb.yaml` | The knowledge base — CAF/WAF pillar guidance in prose, indexed by resource kind |
+| `dashboard/server.py` | Python backend serving the demo dashboard, wrapping the engine in an HTTP API |
+| `dashboard/static/app.jsx` | The React frontend — verdict banner, charts, findings, benchmark view |
+| `dashboard/static/index.html`, `styles.css` | Dashboard page shell and the validated colour system |
+| `scripts/benchmark.py` | The evaluation harness — 42 labelled violations, measures detection rate and false positives |
+| `tests/test_engine.py` | 18 end-to-end tests: verdicts, waivers, both layers, all three report formats |
+| `docs/architecture.md` | The full technical design document and its rationale |
+| `docs/dashboard.md`, `docs/benchmark-results.md` | Dashboard usage guide and the measured results |
 
-### Your two-minute explanation
+### What to say
 
-> "My module turns a Terraform plan into a compliance verdict input.
+> "My part answers the question the whole project exists to answer: can an AI agent catch CAF/WAF violations that a static rule never could? The engine in `agent/engine.py` runs three layers — deterministic rules first, because they're free and certain; then my reasoning layer, which retrieves only the framework guidance relevant to a resource from a knowledge base I wrote in `agent/knowledge/caf_waf_kb.yaml`, and looks for violations no rule encodes; then policy, which applies an organisation's thresholds and any time-boxed waivers.
 >
-> Terraform emits `resource_changes[]` — for each resource, its type, what action is planned, and the full `after` state. I parse that into `Resource` objects, and the key step is that I assign each one a **canonical `Kind`**. `azurerm_storage_account`, `aws_s3_bucket` and `google_storage_bucket` all become `Kind.OBJECT_STORAGE`. That single mapping table is why the gate is cloud-agnostic: I write a rule once against `OBJECT_STORAGE` and it works on all three clouds. There's a test that asserts exactly this.
+> The reasoning layer has two interchangeable implementations. The offline one is free heuristics — it's also the control arm of an experiment: I run the same plan with and without it and measure the difference. The LLM one calls a real model but is capped on resource count, output tokens, and cached, so a repeat run costs nothing.
 >
-> Then 22 rules run over those resources. Each rule is a class with an id, a **pillar**, a severity, the kinds it applies to, and a `check()` method that returns an explanation or nothing. The pillar is mandatory — it's an enum, so a finding literally cannot exist without naming the CAF or WAF pillar it violates. That's what lets the report say *which* pillar was broken instead of just failing.
+> `scripts/benchmark.py` is how I prove the claim rather than assert it: 42 hand-labelled violations across three clouds. Rules alone catch 88%. With reasoning, 100%. Five violations are recoverable only by reasoning — that's the actual contribution, quantified.
 >
-> Rules are parameterised, not hardcoded. The approved region list, the mandatory tags, the sensitive port list — all overridable from `policies/policy.yaml`, so an organisation adapts the gate without touching Python."
+> The dashboard is the same engine wired to a browser so the result is visible, not just a terminal exit code."
 
-### The three details that show depth
+### Depth points if asked
 
-**1. `["delete", "create"]` is a replacement, not a delete.**
-> "Terraform encodes a forced replacement as both actions in one list. If I'd treated that as a delete, every create-time rule would skip it — and someone could bypass the entire gate by forcing a replacement. So I collapse it to `Action.REPLACE` and treat it as mutating. It's a test case."
-
-**2. The firewall/database misclassification.**
-> "`azurerm_mssql_firewall_rule` contains the substring `sql`, so my heuristic fallback classified it as a database. That produced three false positives on one object — missing tags, missing cost centre, missing diagnostics — on a firewall rule that has no tags, no SKU and no logs. I fixed it by matching firewall patterns *before* database patterns, and it's a regression test now. It's a good example of why the false-positive tests matter as much as the detection tests."
-
-**3. Unknown types fall through to heuristics, not to silence.**
-> "If a provider ships a resource type I've never seen, I don't ignore it — I match on substrings and put it in the closest bucket so it still gets checked. Silently skipping unknown resources is how a gate develops blind spots."
-
-### Likely questions
-
-**"How is this different from Checkov?"**
-> "At my layer alone, it isn't very different — that's the honest answer. My layer is deterministic rules, roughly what a static scanner gives you. The difference is two things: I run on the *plan* rather than the HCL source, so I see fully resolved values after variables and modules are evaluated; and my findings feed a reasoning layer on top, which is Gaurish's module and where the actual novelty is."
-
-**"Why 22 rules? Why not 200?"**
-> "22 is enough to cover every CAF governance area and all six WAF pillars, which is what validates the architecture. Scaling to 200 is adding entries to a registry — it's volume, not new engineering. We chose to demonstrate breadth across pillars rather than depth in one."
-
-**"How do you avoid false positives?"**
-> "Two ways. Every rule is tested in both directions — it must fire on the violation and stay silent on the compliant equivalent. And unknown values are never violations: when Terraform computes an attribute at apply time it shows up as `null`, and I treat that as 'not a violation' rather than guessing. The benchmark reports zero false positives on the compliant module."
-
-### Demo you run
-
-```bash
-python -m agent.cli rules                     # the catalogue
-python -m agent.cli explain WAF-SEC-004       # framework traceability
-python -m pytest tests/test_rules.py -v       # both-directions testing
-```
+- **Why the reasoning layer can't block a build by default** (`fail_on_reasoner_findings: false` in `agent/config.py`): an LLM is non-deterministic and sits on a control path, so it's advisory until an org measures its precision and opts in.
+- **Why retrieval is keyed on resource kind, not embeddings**: it's cheaper and fully deterministic — you can say in advance exactly what guidance any resource will be judged against.
+- **Why waivers expire** (`Waiver.is_expired()` in `config.py`): every compliance exception process dies the same way — "temporary" becomes permanent. An expired waiver stops suppressing its finding and is called out in the report.
 
 ---
 
-# Module B — Bhumika Singh
-## CI/CD Pipeline, Terraform, Azure Integration and Reporting
+# Akshat Gupta — Medium Contribution
+## Plan Parsing and the Deterministic Rule Engine
 
-### What you own
+This is Layer 1: turning a raw Terraform plan into something checkable, and the 22 concrete rules that check it.
 
-| File | What it does |
+### Files and folders owned
+
+| Path | What it is |
 |---|---|
-| `.github/workflows/secops-gate.yml` | The pipeline the gate lives inside |
-| `infra/demo/` | Minimal compliant Azure module (`main.tf`, `variables.tf`, `outputs.tf`) |
-| `examples/terraform/noncompliant/` | The seeded misconfiguration module |
-| `scripts/azure-bootstrap.sh` | Azure setup: OIDC, state backend, budget |
-| `scripts/azure-cost-check.sh`, `azure-destroy.sh` | Credit guardrails |
-| `agent/report.py` | Markdown / JSON / SARIF renderers |
-| `agent/cli.py` | The command the pipeline runs |
-| `dashboard/` | The demo web UI (React frontend + Python backend) |
-| `docs/azure-setup.md`, `docs/cost-control.md` | Setup and cost documentation |
+| `agent/models.py` | The data model — `Resource`, `Finding`, `Pillar`, `Severity`, `Verdict` |
+| `agent/plan_parser.py` | Terraform plan JSON → normalized, cloud-agnostic `Resource` objects |
+| `agent/rules/base.py` | The `Rule` base class and the registry every rule plugs into |
+| `agent/rules/caf.py` | 7 CAF rules — governance tags, naming, landing-zone region, network boundary, cost attribution, identity |
+| `agent/rules/waf.py` | 15 WAF rules — security, reliability, cost, operations, performance, sustainability |
+| `tests/test_plan_parser.py` | Parser tests — provider detection, the firewall/database misclassification fix |
+| `tests/test_rules.py` | Every rule tested in both directions: fires on the violation, silent on the compliant case |
 
-### Your two-minute explanation
+### What to say
 
-> "My module is everything that makes the agent an actual pipeline gate rather than a script someone runs by hand.
+> "My module is what makes the gate cloud-agnostic. Terraform emits a `resource_changes` list — for each resource, its type and its full planned configuration. I parse that in `plan_parser.py` and, critically, map every provider-specific type to one canonical `Kind`: `azurerm_storage_account`, `aws_s3_bucket`, and `google_storage_bucket` all become `Kind.OBJECT_STORAGE`. That's the whole multi-cloud story — a rule written once against `OBJECT_STORAGE` works on all three clouds.
 >
-> The workflow has three jobs. First the agent's **own unit tests** run — if the gate's tests fail, its verdicts are meaningless, so nothing downstream is allowed to proceed. Then the plan-and-gate job runs `terraform plan`, converts it to JSON with `terraform show -json`, and hands it to the agent. The agent's **exit code is the pipeline decision**: 0 passes, 2 blocks. Apply only runs on main, only after a passing gate, and only behind a protected environment that requires a human approval — so there's a second control on top of the automated one.
->
-> The clever part is that the matrix plans **two** modules on every PR. The compliant one must pass, and the seeded misconfiguration module must be **blocked**. If the seeded module ever stops being blocked, the build fails — that's the regression test for the gate itself, running in CI on every change.
->
-> On output, the agent produces three formats: Markdown that gets posted as a PR comment, JSON for machines, and SARIF that lands in GitHub's Security tab as tracked alerts. The PR comment updates in place rather than adding a new comment on every push."
+> Then 22 rules in `agent/rules/` run against those resources. Each one is a small class: an id, a mandatory CAF or WAF pillar, a severity, and a `check()` method. The pillar is enforced by the type system — a finding literally cannot exist without naming which pillar it violates."
 
-### The three details that show depth
+### Depth points if asked
 
-**1. OIDC federation — no stored secret.**
-> "The normal approach is to create a service principal secret and paste it into GitHub Secrets. That's a long-lived, copyable credential — exactly what our own `WAF-SEC-006` and `CAF-IAM-001` rules exist to catch. Instead we use OIDC federation: GitHub presents a signed token describing the repo and branch, Azure trusts that issuer for specific registered subjects and exchanges it for a token valid for minutes. Nothing long-lived is stored anywhere. The project holds itself to the standard it enforces."
-
-**2. Least privilege on our own service principal.**
-> "The bootstrap grants Contributor scoped to the *resource groups*, not the subscription. If we'd granted it at subscription scope, our own `CAF-IAM-001` rule would flag it as critical. We ran the gate against our own infrastructure design."
-
-**3. The cost architecture.**
-> "The demo module deliberately has no VM, no AKS, no SQL Server, no App Service plan and no private endpoint — those are the five things that actually drain credits. It's a resource group, a storage account, and a Log Analytics workspace with a 0.1 GB/day hard cap so ingestion *stops* rather than bills. Under ₹50 a month, usually under ₹10.
->
-> And here's the key insight: the expensive misconfigurations — a ₹25,000/month D8s VM, an AKS cluster — are demonstrated through **plan-only fixtures**. The gate reads a plan, not a deployment, so we can test the most expensive violations at exactly zero cost. That isn't a workaround; it's the reason gating at plan time is the right architecture."
-
-### Likely questions
-
-**"Why gate at plan time instead of using Azure Policy?"**
-> "Azure Policy evaluates resources that already exist, or blocks at the ARM layer after the pipeline has already committed to deploying. By then you've spent money, and for something like a public storage container the data may already be exposed — industry benchmarks put average misconfiguration dwell time at 180+ days. The plan JSON is the earliest point where you know the fully resolved set of changes and the last point before anything is created. They're complementary, but plan-time is cheaper and earlier."
-
-**"What if the agent crashes? Does the pipeline hang?"**
-> "No. Exit code 3 is a usage or parse error, and the workflow treats a non-zero gate exit as a failure — it fails closed for real errors. But the agent is written so a malformed plan attribute produces a verdict rather than a traceback; there's a test that feeds it deliberately corrupt attribute types. And if the optional LLM endpoint is unreachable, it degrades to the offline reasoner and says so in the report rather than breaking the build."
-
-**"How would a team adopt this on an existing repo with 100 violations?"**
-> "`--soft-fail`. It always exits 0, so you get the full report without blocking anyone. Fix the backlog, then turn enforcement on. A gate that can't be adopted incrementally doesn't get adopted."
-
-### Demo you run
-
-```bash
-python -m dashboard.server                # the visual demo -- lead with this
-```
-Show the compliant plan passing, then the seeded plan blocking, then toggle the
-reasoning layer off and back on. Then the command-line reality behind it:
-
-```bash
-bash scripts/azure-cost-check.sh          # what exists and what it costs
-cd infra/demo && terraform plan -out=tf.plan
-terraform show -json tf.plan > plan.json
-cd ../.. && python -m agent.cli evaluate --plan infra/demo/plan.json
-# only then: terraform apply
-```
-Then show a live PR with the gate comment and the Security tab.
+- **The firewall/database bug** (now a regression test): `azurerm_mssql_firewall_rule` contains the substring "sql", so the fallback classifier put it in the database bucket, producing three false positives (missing tags, missing cost centre, missing diagnostics) on an object that has none of those. Fixed by matching firewall patterns before database patterns.
+- **`["delete","create"]` is a replacement, not a delete**: Terraform's plan JSON encodes a forced replacement as both actions in one list. Treating it as a delete would let every create-time rule skip a resource being force-replaced.
+- **Unknown types fall to heuristics, not silence**: an unrecognised resource type is substring-matched into the closest bucket rather than dropped, so the gate never develops a blind spot on a new resource type.
 
 ---
 
-# Module C — Gaurish Todi
-## Reasoning Layer, Policy Engine, Evaluation and Architecture
+# Bhumika Singh — Light Contribution
+## CI/CD Pipeline, Terraform Infrastructure, Azure Setup & CLI/Reporting
 
-> **This is the integrative module.** Akshat can present the rule engine without knowing how the pipeline works, and Bhumika can present the pipeline without knowing how a rule is written. You cannot present this module without understanding both — because your job is to explain why the two of them together constitute a *research contribution* rather than a well-built script.
+This is the connective tissue: wiring the engine into a real GitHub Actions pipeline, a real (cheap) Terraform deployment, and the command-line surface the pipeline actually runs.
 
-### What you own
+### Files and folders owned
 
-| File | What it does |
+| Path | What it is |
 |---|---|
-| `agent/knowledge/caf_waf_kb.yaml` | The CAF/WAF knowledge base the reasoner reads |
-| `agent/reasoner/base.py` | Retrieval, redaction, prompt construction |
-| `agent/reasoner/offline.py` | Free deterministic reasoner (CI default + control arm) |
-| `agent/reasoner/llm.py` | Azure OpenAI / Anthropic with structural cost controls |
-| `agent/reasoner/__init__.py` | Reasoner factory with graceful fallback |
-| `agent/engine.py` | Three-layer orchestration and verdict production |
-| `agent/config.py` | Thresholds, rule overrides, time-boxed waivers |
-| `scripts/benchmark.py` | The evaluation harness and ground truth |
-| `docs/architecture.md`, `docs/benchmark-results.md` | The technical narrative |
-| `tests/test_engine.py` | 18 end-to-end tests |
+| `.github/workflows/secops-gate.yml` | The pipeline: tests → plan both modules → gate → PR comment → apply behind approval |
+| `infra/demo/` | The compliant demo module (`main.tf`, `variables.tf`, `outputs.tf`, `terraform.tfvars.example`) |
+| `examples/terraform/noncompliant/main.tf` | The seeded misconfiguration module used as the gate's own regression test |
+| `examples/plans/*.plan.json` | The four plan fixtures (Azure ×2, AWS, GCP) used by tests and the benchmark |
+| `scripts/azure-bootstrap.sh` | One-time Azure setup: resource groups, state storage, OIDC federation, budget alert |
+| `scripts/azure-cost-check.sh`, `azure-destroy.sh` | Credit guardrails — what's running, and tearing it back down |
+| `scripts/demo.sh` | The no-cloud local demo walkthrough |
+| `agent/report.py` | Markdown / JSON / SARIF report renderers |
+| `agent/cli.py` | The CLI the pipeline actually invokes, and its exit-code contract |
+| `policies/policy.yaml` | The organisation-tunable policy file |
+| `docs/azure-setup.md`, `docs/cost-control.md`, `docs/setup-from-zero.md` | Setup, cost, and from-zero walkthroughs |
 
----
+### What to say
 
-## C.1 — The research gap, stated precisely
-
-This is your opening, and it must be sharp.
-
-> "Existing policy-as-code tools — Checkov, tfsec, OPA, Sentinel — enforce rules that someone has already written down. That's necessary but bounded: they can only catch what a human anticipated and encoded.
+> "My part makes this an actual pipeline gate instead of a script someone runs by hand. The workflow in `.github/workflows/secops-gate.yml` runs the agent's own tests first, then plans two Terraform modules in parallel — the compliant one, which must pass, and a seeded misconfiguration module, which must be blocked. If the seeded module is ever *not* blocked, the build fails — that's a regression test for the gate itself, running on every change.
 >
-> CAF and WAF aren't rule sets. They're thousands of words of narrative architectural guidance — 'prefer identity-based authentication over shared keys', 'production data should survive the loss of a datacentre', 'grants should be scoped to the narrowest resource that satisfies the requirement'. Most of that has never been turned into an executable rule, and much of it is contextual in a way a static rule can't express.
+> The Terraform module in `infra/demo/` is deliberately minimal — a resource group, a storage account, and a free-tier Log Analytics workspace with a hard daily quota, nothing that costs real money. Authentication uses GitHub OIDC federation, so no client secret is ever stored in the repo.
 >
-> The literature confirms LLMs can outperform rule-based scanners at misconfiguration detection — GenKubeSec for Kubernetes, Vo et al. 2025 for Terraform code smells. But no existing work embeds an LLM reasoning agent as a **CI/CD pipeline gate** that checks Terraform **plans** against CAF/WAF governance **before deployment**, across multiple clouds. That specific combination is our gap."
+> `agent/cli.py` is the actual command the pipeline runs, and its exit code — 0, 1, or 2 — is the entire integration surface. `agent/report.py` turns a verdict into a PR comment, a JSON artifact, and a SARIF file for GitHub's Security tab."
 
-Then land the number:
+### Depth points if asked
 
-> "We measured it. 42 seeded violations across Azure, AWS and GCP. Deterministic rules alone — which is roughly what a static scanner gives you — catch 37, 88.1%. Adding the reasoning layer catches all 42. **Five violations are recoverable only by reasoning over framework guidance**, with zero false positives on the compliant module. That five is the contribution, quantified."
-
----
-
-## C.2 — The three-layer architecture, and why it is three
-
-> "The gate is three layers, and the separation is the design.
->
-> **Layer 1, deterministic rules.** Fast, free, explainable, confidence 1.0. This handles everything expressible as an if-statement.
->
-> **Layer 2, reasoning.** This handles what the frameworks *imply* but no rule encodes. It receives the resource plus retrieved framework guidance plus the list of what Layer 1 already found, and is explicitly instructed not to repeat it — so it only ever adds.
->
-> **Layer 3, policy.** Thresholds and waivers. The gate is a control, and controls need an escape hatch that doesn't become a hole.
->
-> Why not just one LLM call over the whole plan? Three reasons. Cost — Layer 1 is free and catches 88%, so paying a model to re-derive it is waste. Determinism — a build gate that gives different answers on identical input is unusable, so the blocking decisions must come from deterministic rules. And explainability — when the gate blocks a deploy, the developer deserves 'you violated WAF-SEC-004, here is the pillar, here is the HCL fix', not a paragraph of model prose."
-
----
-
-## C.3 — How the reasoning layer actually works
-
-This is your technical core. Be specific.
-
-**Retrieval.**
-> "The knowledge base has two parts: the pillars with their principles in prose, and a `kind_focus` index mapping each canonical resource kind to the pillars worth considering plus specific watch-points. When a managed database arrives, I retrieve only the three pillars indexed for databases and their watch-points — not the entire CAF/WAF corpus.
->
-> It's retrieval-augmented generation, but the retrieval is keyed on a **type system** rather than embeddings. That's cheaper, and it's fully deterministic in what it selects — I can tell you exactly what guidance any given resource will be judged against, which you can't do with a vector search."
-
-**Two implementations, one interface.**
-> "`OfflineReasoner` is 12 hand-written probes, each corresponding to a watch-point. Free, milliseconds, deterministic — the CI default. `LLMReasoner` talks to Azure OpenAI or Anthropic over plain urllib, no vendor SDK.
->
-> The offline reasoner isn't just a cheap fallback — it's the **control arm** of the experiment. The claim is that LLM reasoning finds things neither the rules nor good heuristics catch. You cannot measure that without a deterministic baseline to measure against."
-
-**Four guardrails on the model.**
-> "An LLM in a build gate is a non-deterministic, untrusted component on a control path. So:
->
-> 1. **It can't invent resources.** Findings whose address isn't in the submitted set are dropped.
-> 2. **It can't duplicate Layer 1.** Rule findings are passed in as `already_reported` and the prompt forbids repeating them. There's a test that asserts zero title overlap per resource between the layers.
-> 3. **It can't fail a build by default.** `fail_on_reasoner_findings: false`. Reasoning findings appear in full and can escalate to 'remediate', but only deterministic rules can block — until an organisation has measured the reasoner's precision and explicitly opts in.
-> 4. **It can't break the pipeline.** Endpoint down, malformed JSON, timeout — all degrade to an informational finding saying the verdict rests on rules alone. A gate that fails closed on a model outage is worse than no gate."
-
-**Cost controls, structural not advisory.**
-> "Triage — only resources whose kind is in the knowledge base are candidates. A hard cap of 12 resources per run, so a 200-resource plan still sends 12. Redaction — secrets stripped, strings truncated at 160 characters, lists capped at 5 elements, because prompt size *is* the bill. And a disk cache keyed on model plus prompt hash, so re-running an unchanged plan costs nothing.
->
-> Net effect: under ₹0.10 per gated run on `gpt-4o-mini`. And CI pins `SECOPS_REASONER: offline`, so no pull request can spend money by accident."
-
----
-
-## C.4 — Policy: waivers that expire
-
-> "Every real compliance system dies the same way: someone adds an exception 'temporarily', and five years later nobody remembers why it's there.
->
-> So a waiver here requires a reason, matches by glob so it can't be over-broad by accident, and **expires**. When it expires it stops suppressing its finding *and* the report explicitly calls out that it lapsed. There are two tests — one that a valid waiver suppresses and records its reason, one that an expired waiver stops suppressing and gets reported. Accepted risk can't quietly become permanent."
-
----
-
-## C.5 — The evaluation, and why it has three numbers
-
-> "The success metric in our proposal was 'catching a broader class of CAF/WAF violations than existing static scanners, measured against a seeded test set'. To test that honestly you need three numbers, not one.
->
-> **Recall** — 42 seeded violations, all detected. But recall alone is gameable: a gate that flags everything has perfect recall and is useless.
->
-> **False positives** — zero on the compliant module. This is what decides whether anyone leaves the gate switched on. A gate that fails clean code gets disabled by the team that owns it, so we treat this as equally important.
->
-> **Marginal contribution of reasoning** — 5 violations. This is the actual research claim, because the rules layer approximates what a static scanner already does. Running the same fixtures with the reasoner disabled and comparing is the experiment."
-
-**Be ready to state the limitations before you're asked.** It's the strongest move available to you:
-
-> "Three honest caveats. The ground truth is self-authored — 42 violations we seeded and labelled ourselves; a stronger evaluation would use an independent corpus of public modules with known CVEs. The benchmark matches on (resource, pillar) rather than exact rule id, which is the fair test — was the violation surfaced to the developer? — but it's more lenient than exact matching, and we say so in the code. And the offline reasoner is heuristics, not reasoning; it's a faithful control arm and a free default, but the genuine framework-intent reasoning is the LLM path."
-
----
-
-## C.6 — Questions aimed at you specifically
-
-**"Why should I trust an LLM to gate my production deployments?"**
-> "You shouldn't, and by default the system doesn't let you. `fail_on_reasoner_findings` is false — the LLM can't block a build. It surfaces concerns in the report and can escalate to 'remediate', but blocking is reserved for deterministic rules with confidence 1.0. Organisations opt into LLM-blocking only after measuring its precision on their own workloads. That's a deliberate architectural stance: the reasoning layer widens *coverage*, the rules layer holds *authority*."
-
-**"What happens when the model hallucinates a violation?"**
-> "Three filters. Structurally, findings referencing a resource that isn't in the submitted set are dropped — it can't invent infrastructure. Statistically, findings below 0.6 confidence are dropped as noise. And architecturally, even a surviving hallucination is advisory and can't block. The worst case is a developer reading one wrong sentence in a report, not a broken deployment."
-
-**"Isn't this just RAG with extra steps?"**
-> "It's RAG, but the interesting part is what it retrieves *over*. Normal RAG retrieves documents by embedding similarity. Here retrieval is keyed on a type system — a canonical resource kind derived from the plan — so I know deterministically which guidance any resource will be judged against. And the retrieval index is authored alongside the rule engine, which is what lets Layer 2 know precisely what Layer 1 already covered. That coupling is what makes the two layers additive instead of redundant."
-
-**"How does this scale to a real organisation?"**
-> "The rule engine is a registry — adding rules is entries, not engineering. The knowledge base is YAML, so a platform team extends framework coverage without writing Python. `policies/policy.yaml` handles per-org tuning: thresholds, region lists, mandatory tags, waivers. The realistic scaling limit isn't rules, it's the LLM cost on very large plans, which is why the 12-resource cap and the cache exist. Beyond that you'd triage by blast radius — reason about resources that are new or network-facing, not every unchanged item."
-
-**"What's the next step — TRL 5?"**
-> "Three things. Replace the self-authored ground truth with an independent corpus. Run the LLM reasoner at volume to get real precision numbers, which is what would justify enabling `fail_on_reasoner_findings`. And deepen the AWS and GCP rule content — the architecture is proven cloud-agnostic by tests, but the rule *content* is Azure-weighted, matching our CAF/WAF framing."
-
----
-
-## C.7 — Your demo
-
-```bash
-# 1. The layered verdict, both layers visible in the report
-python -m agent.cli evaluate --plan examples/plans/azure_noncompliant.plan.json \
-  --markdown out/report.md --format markdown
-
-# 2. The experiment: same plan, reasoning disabled
-python -m agent.cli evaluate --plan examples/plans/azure_noncompliant.plan.json \
-  --no-reasoner
-
-# 3. The measurement
-python scripts/benchmark.py
-
-# 4. Waiver expiry
-python -m pytest tests/test_engine.py -k waiver -v
-```
-
-Step 2 into step 3 is the money shot: show the same plan losing findings when reasoning is switched off, then show the benchmark quantifying it.
+- **Why OIDC instead of a stored secret**: GitHub presents a signed token, Azure exchanges it for one valid for minutes — nothing long-lived is ever stored, which is exactly the pattern the project's own `WAF-SEC-006` rule flags when done wrong.
+- **Why least-privilege scoping matters here**: the service principal is granted Contributor on two resource groups, not the subscription — because the project's own `CAF-IAM-001` rule would flag a subscription-wide grant as critical.
+- **Why `--soft-fail` exists** (`agent/cli.py`): onboarding an existing repo with pre-existing violations needs a report-only mode first; a gate that can't be adopted incrementally doesn't get adopted.
 
 ---
 
@@ -288,25 +126,19 @@ Step 2 into step 3 is the money shot: show the same plan losing findings when re
 
 | Slot | Who | Content | Time |
 |---|---|---|---|
-| 1 | **Gaurish** | Problem, research gap, three-layer architecture, where the agent sits | 3 min |
-| 2 | **Akshat** | Plan parsing, canonical kinds, the rule engine, live `rules` + `explain` | 4 min |
-| 3 | **Bhumika** | Dashboard demo, pipeline, OIDC, Terraform modules, live PR with gate comment, cost design | 4 min |
-| 4 | **Gaurish** | Reasoning layer, guardrails, waiver expiry, benchmark, limitations, next steps | 4 min |
-| 5 | All | Questions | — |
-
-Gaurish opens and closes because the framing and the evidence are both his; the middle two sections are the concrete build. Each of Akshat's and Bhumika's sections stands alone — neither needs the other's material to make sense, which is what makes them safe to present independently under time pressure.
+| 1 | **Gaurish** | Problem, architecture, the reasoning layer, dashboard demo | 5 min |
+| 2 | **Akshat** | Plan parsing, canonical kinds, the rule catalogue | 3 min |
+| 3 | **Bhumika** | Pipeline, Azure setup, CLI and reports | 3 min |
+| 4 | **Gaurish** | Benchmark results, limitations, next steps | 3 min |
+| — | All | Questions | — |
 
 ---
 
 # Integration checklist
 
-Before each review, run and confirm all five are green:
-
 ```bash
-python -m pytest tests/ -q                      # 63 passed
-python scripts/benchmark.py                     # 100% detection, 0 FP
-python -m dashboard.server                      # dashboard loads, all 3 tabs
-bash scripts/demo.sh                            # full walkthrough
-bash scripts/azure-cost-check.sh                # nothing unexpected running
-# and: open a PR, confirm the gate comment appears
+python -m pytest tests/ -q          # 63 passed
+python scripts/benchmark.py         # 100% detection, 0 false positives
+python -m dashboard.server          # dashboard loads, all 3 tabs work
+bash scripts/demo.sh                # full local walkthrough, no cloud needed
 ```

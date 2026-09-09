@@ -219,7 +219,11 @@ def load_plan(path: Union[str, Path]) -> PlanSummary:
     if not p.exists():
         raise PlanParseError("Plan file not found: {}".format(p))
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        # utf-8-sig tolerates a leading BOM and is a no-op when there isn't
+        # one. PowerShell's `Out-File -Encoding utf8` (the natural way to
+        # redirect `terraform show -json` on Windows) always writes a BOM,
+        # so strict utf-8 here would reject every plan produced that way.
+        data = json.loads(p.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         raise PlanParseError("{} is not valid JSON: {}".format(p, exc)) from exc
     return parse_plan(data)
