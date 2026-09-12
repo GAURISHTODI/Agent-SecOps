@@ -1,0 +1,98 @@
+Agent SecOps: BLOCK (9 resource(s), 48 finding(s), 12 ms)
+  CRITICAL   WAF-SEC-006    WAF:Security                 azurerm_linux_virtual_machine.app
+             Plain-text credential supplied in field(s): admin_password. The value is now in the plan JSON and in Terraform state.
+  CRITICAL   WAF-SEC-006    WAF:Security                 azurerm_mssql_server.db
+             Plain-text credential supplied in field(s): administrator_login_password. The value is now in the plan JSON and in Terraform state.
+  CRITICAL   WAF-SEC-004    WAF:Security                 azurerm_network_security_rule.ssh
+             Allows inbound traffic from * to sensitive port(s) 22.
+  CRITICAL   CAF-IAM-001    CAF:Identity                 azurerm_role_assignment.app_owner
+             Grants the highly-privileged role "Owner" at subscription/management-group scope.
+  CRITICAL   WAF-SEC-003    WAF:Security                 azurerm_storage_account.data
+             allow_nested_items_to_be_public is true, permitting anonymous reads.
+  CRITICAL   REASON-OFFLINE WAF:Security                 azurerm_mssql_firewall_rule.allow_all
+             The firewall rule admits every address on the internet. This is the 'Allow Azure services' anti-pattern that WAF Security explicitly warns against for production data.
+  HIGH       CAF-LZ-001     CAF:LandingZone              azurerm_key_vault.kv
+             Deploys to region "brazilsouth", which is not in the approved landing-zone region list (centralindia, southindia, eastus).
+  HIGH       CAF-LZ-002     CAF:LandingZone              azurerm_key_vault.kv
+             Public network access is enabled, so the service is reachable from outside the landing-zone virtual network.
+  HIGH       WAF-REL-003    WAF:Reliability              azurerm_key_vault.kv
+             Key material is destructible: purge protection is disabled.
+  HIGH       CAF-LZ-001     CAF:LandingZone              azurerm_linux_virtual_machine.app
+             Deploys to region "brazilsouth", which is not in the approved landing-zone region list (centralindia, southindia, eastus).
+  HIGH       CAF-LZ-001     CAF:LandingZone              azurerm_mssql_server.db
+             Deploys to region "brazilsouth", which is not in the approved landing-zone region list (centralindia, southindia, eastus).
+  HIGH       CAF-LZ-002     CAF:LandingZone              azurerm_mssql_server.db
+             Public network access is enabled, so the service is reachable from outside the landing-zone virtual network.
+  HIGH       WAF-REL-002    WAF:Reliability              azurerm_mssql_server.db
+             backup_retention_days is 1 day(s), below the required minimum of 7.
+  HIGH       CAF-LZ-001     CAF:LandingZone              azurerm_public_ip.edge
+             Deploys to region "brazilsouth", which is not in the approved landing-zone region list (centralindia, southindia, eastus).
+  HIGH       CAF-LZ-001     CAF:LandingZone              azurerm_resource_group.rg
+             Deploys to region "brazilsouth", which is not in the approved landing-zone region list (centralindia, southindia, eastus).
+  HIGH       CAF-LZ-001     CAF:LandingZone              azurerm_storage_account.data
+             Deploys to region "brazilsouth", which is not in the approved landing-zone region list (centralindia, southindia, eastus).
+  HIGH       CAF-LZ-002     CAF:LandingZone              azurerm_storage_account.data
+             Public network access is enabled, so the service is reachable from outside the landing-zone virtual network.
+  HIGH       WAF-SEC-001    WAF:Security                 azurerm_storage_account.data
+             https_traffic_only_enabled is false, so the account accepts plain HTTP.
+  HIGH       WAF-REL-001    WAF:Reliability              azurerm_storage_account.data
+             Replication is LRS (single datacentre) on an environment-untagged storage account; a zone outage would make the data unavailable.
+  HIGH       REASON-OFFLINE WAF:Security                 azurerm_linux_virtual_machine.app
+             Password authentication is enabled on a Linux VM. WAF Security requires key-based or identity-based access because passwords are brute-forceable and rarely rotated.
+  HIGH       REASON-OFFLINE CAF:Identity                 azurerm_role_assignment.app_owner
+             The assignment is scoped at subscription or management-group level. CAF identity guidance requires the narrowest scope that satisfies the requirement, usually a single resource group or resource.
+  MEDIUM     WAF-OPS-001    WAF:OperationalExcellence    azurerm_key_vault.kv
+             No diagnostic setting in this plan targets the resource, so its logs and metrics are not retained anywhere.
+  MEDIUM     CAF-GOV-001    CAF:Governance               azurerm_linux_virtual_machine.app
+             Missing mandatory tag(s): costcenter. Tags present: environment, owner.
+  MEDIUM     CAF-COST-001   CAF:CostManagement           azurerm_linux_virtual_machine.app
+             Billable resource (SKU "Standard_D8s_v3") carries no "costcenter" tag, so its spend cannot be attributed to a budget.
+  MEDIUM     WAF-COST-001   WAF:CostOptimization         azurerm_linux_virtual_machine.app
+             Non-production ("dev") workload provisions the premium SKU "Standard_D8s_v3".
+  MEDIUM     CAF-GOV-001    CAF:Governance               azurerm_mssql_server.db
+             Missing mandatory tag(s): owner, costcenter. Tags present: environment.
+  MEDIUM     CAF-COST-001   CAF:CostManagement           azurerm_mssql_server.db
+             Billable resource (SKU "unspecified") carries no "costcenter" tag, so its spend cannot be attributed to a budget.
+  MEDIUM     WAF-SEC-002    WAF:Security                 azurerm_mssql_server.db
+             Minimum TLS version is 1.0, below the required 1.2.
+  MEDIUM     WAF-OPS-001    WAF:OperationalExcellence    azurerm_mssql_server.db
+             No diagnostic setting in this plan targets the resource, so its logs and metrics are not retained anywhere.
+  MEDIUM     CAF-GOV-001    CAF:Governance               azurerm_public_ip.edge
+             Missing mandatory tag(s): owner, costcenter. Tags present: environment.
+  MEDIUM     CAF-LZ-003     CAF:LandingZone              azurerm_public_ip.edge
+             Allocates a public IP address but carries no "exposure" tag justifying internet exposure.
+  MEDIUM     CAF-GOV-001    CAF:Governance               azurerm_resource_group.rg
+             Missing mandatory tag(s): owner, environment, costcenter. Tags present: <none>.
+  MEDIUM     CAF-GOV-001    CAF:Governance               azurerm_storage_account.data
+             Missing mandatory tag(s): owner, environment, costcenter. Tags present: dataclass.
+  MEDIUM     WAF-SEC-002    WAF:Security                 azurerm_storage_account.data
+             Minimum TLS version is TLS1_0, below the required 1.2.
+  MEDIUM     WAF-OPS-001    WAF:OperationalExcellence    azurerm_storage_account.data
+             No diagnostic setting in this plan targets the resource, so its logs and metrics are not retained anywhere.
+  MEDIUM     REASON-OFFLINE CAF:Identity                 azurerm_key_vault.kv
+             The vault relies on access policies rather than Azure RBAC. CAF identity guidance prefers RBAC because access policies are not visible to standard access reviews and drift silently.
+  MEDIUM     REASON-OFFLINE WAF:Reliability              azurerm_linux_virtual_machine.app
+             The instance is pinned to no availability zone or set, so a single rack or zone failure takes the workload down. WAF Reliability asks for an explicit availability decision, not an accidental one.
+  MEDIUM     REASON-OFFLINE WAF:Security                 azurerm_storage_account.data
+             The account still accepts shared access keys. WAF Security prefers Entra ID / IAM authentication because account keys are long-lived, shareable and cannot be attributed to a principal.
+  MEDIUM     REASON-OFFLINE WAF:Reliability              azurerm_storage_account.data
+             Blob versioning is disabled, so an overwrite or a ransomware-style bulk write is unrecoverable. WAF Reliability treats object data as state that must survive operator error, not just infrastructure failure.
+  LOW        CAF-GOV-002    CAF:Governance               azurerm_key_vault.kv
+             Name "demo-kv" does not match the required convention ^[a-z0-9]+-(dev|test|stage|prod)-[a-z0-9]+(-[a-z0-9]+)*$.
+  LOW        CAF-GOV-002    CAF:Governance               azurerm_linux_virtual_machine.app
+             Name "demo-vm" does not match the required convention ^[a-z0-9]+-(dev|test|stage|prod)-[a-z0-9]+(-[a-z0-9]+)*$.
+  LOW        CAF-GOV-002    CAF:Governance               azurerm_mssql_server.db
+             Name "demo-sql-server" does not match the required convention ^[a-z0-9]+-(dev|test|stage|prod)-[a-z0-9]+(-[a-z0-9]+)*$.
+  LOW        WAF-SEC-005    WAF:Security                 azurerm_mssql_server.db
+             No customer-managed key is configured; the service falls back to platform-managed keys only.
+  LOW        CAF-GOV-002    CAF:Governance               azurerm_public_ip.edge
+             Name "demo-pip" does not match the required convention ^[a-z0-9]+-(dev|test|stage|prod)-[a-z0-9]+(-[a-z0-9]+)*$.
+  LOW        WAF-COST-002   WAF:CostOptimization         azurerm_public_ip.edge
+             Static public IP allocated for a dev workload; it bills continuously even while idle.
+  LOW        CAF-GOV-002    CAF:Governance               azurerm_resource_group.rg
+             Name "demo-rg" does not match the required convention ^[a-z0-9]+-(dev|test|stage|prod)-[a-z0-9]+(-[a-z0-9]+)*$.
+  LOW        WAF-SEC-005    WAF:Security                 azurerm_storage_account.data
+             No customer-managed key is configured; the service falls back to platform-managed keys only.
+  LOW        WAF-SUS-001    WAF:Sustainability           azurerm_storage_account.data
+             Data classified "archive" is kept in the Hot access tier, wasting capacity and energy on data that is rarely read.
+exit=2

@@ -23,7 +23,7 @@
       }
     },
     {
-      "address": "azurerm_log_analytics_workspace.law",
+      "address": "azurerm_log_analytics_workspace.l aw",
       "mode": "managed",
       "type": "azurerm_log_analytics_workspace",
       "name": "law",

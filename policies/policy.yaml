@@ -6,7 +6,6 @@
 # apply, what the org's tags/regions actually are, and which findings are
 # consciously accepted (with an expiry date).
 # ---------------------------------------------------------------------
-
 thresholds:
   # A finding at or above this severity stops the pipeline.
   block_at: high

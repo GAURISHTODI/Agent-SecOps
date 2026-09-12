@@ -66,7 +66,7 @@
           "location": "brazilsouth",
           "version": "12.0",
           "administrator_login": "sqladmin",
-          "administrator_login_password": "P@ssw0rd123!",
+          "administrator_login_password": "P@ssw0rd123!",  
           "minimum_tls_version": "1.0",
           "public_network_access_enabled": true,
           "backup_retention_days": 1,
