@@ -25,7 +25,7 @@ terraform {
 
 provider "azurerm" {
   features {}
-  skip_provider_registration = true
+  resource_provider_registrations = "none"
 }
 
 # VIOLATION: CAF-LZ-001 (unapproved region), CAF-GOV-001 (no tags),
@@ -117,6 +117,35 @@ resource "azurerm_network_security_rule" "ssh" {
   destination_address_prefix = "*"
 }
 
+# Minimal network plumbing the VM needs to validate. Not a labelled
+# violation target -- no rule inspects VIRTUAL_NETWORK/SUBNET/NETWORK_INTERFACE
+# kinds, so this stays out of the benchmark's ground truth.
+resource "azurerm_virtual_network" "vnet" {
+  name                = "demo-vnet"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  address_space       = ["10.0.0.0/16"]
+}
+
+resource "azurerm_subnet" "app" {
+  name                 = "demo-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_network_interface" "app" {
+  name                = "demo-nic"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.app.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
 # VIOLATIONS:
 #   WAF-SEC-006  admin_password hardcoded
 #   WAF-COST-001 premium D8s SKU on a dev workload
@@ -133,7 +162,7 @@ resource "azurerm_linux_virtual_machine" "app" {
   admin_password                  = "SuperSecret#2026"
   disable_password_authentication = false
 
-  network_interface_ids = []
+  network_interface_ids = [azurerm_network_interface.app.id]
 
   os_disk {
     caching              = "ReadWrite"

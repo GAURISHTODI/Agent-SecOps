@@ -27,3 +27,8 @@ venv/
 .vscode/
 .idea/
 .env
+
+# --- Office lock files ---
+~$*.docx
+~$*.pptx
+~$*.xlsx
