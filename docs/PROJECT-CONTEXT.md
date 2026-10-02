@@ -2,7 +2,9 @@
 
 **Purpose of this file.** A single, self-contained reference to the entire project — what it is, how it works, what has actually been built, deployed, tested and documented, and what remains open. Written so that a new session, a new collaborator, or a future you can pick this up cold and be fully oriented in one read. Everything here reflects verified state as of the date below, not aspiration.
 
-**Last verified:** 2026-09-09 · **Repo:** [github.com/GAURISHTODI/Agent-SecOps](https://github.com/GAURISHTODI/Agent-SecOps) · **Tests:** 63/63 passing · **Live Azure:** 3 resources deployed and gated
+**Last verified:** 2026-10-02 · **Repo:** [github.com/GAURISHTODI/Agent-SecOps](https://github.com/GAURISHTODI/Agent-SecOps) · **Tests:** 63/63 passing · **Live Azure:** 3 resources deployed and gated, zero config drift
+
+> **2026-10-02 update.** A second working session (three weeks after the first) found and fixed four real bugs that only surfaced from actually running things again: a broken local dev environment (missing PyYAML), a genuine `terraform validate` failure in CI (the seeded module had an empty `network_interface_ids` list, which the AzureRM schema rejects), live Azure config drift from an AzureRM provider deprecation (`metric` → `enabled_metric`), and a missing `.gitignore` pattern for Office lock files. A budget alert that the CLI had refused to create was created successfully via a direct REST call. All of this is committed and pushed (`6383d04`). See §13 for the full account. The CI pipeline's remaining failure is now isolated to one cause: the three `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` GitHub secrets, which cannot be read back to diagnose and must be reset by a human with repo admin access — everything else about the Azure-side identity (app registration, federated credentials, role assignments) was independently verified correct.
 
 ---
 
@@ -283,13 +285,18 @@ Regenerate any of these with `python scripts/build_figures.py`, then re-run `bui
 
 ## 8. GitHub Actions pipeline — current status
 
-**As of last check: red.** This is expected and not yet resolved — the pipeline was deliberately left for a later, in-person demonstration session rather than debugged live, per explicit instruction. The failure was on the `Terraform plan + CAF/WAF gate (seeded-misconfigurations, ...)` job of run `#2` (commit `306e01d`).
+**As of 2026-10-02: diagnosed, one fix pushed, one fix pending a human action.** Three runs had failed (`#1`–`#3`, commits `8d24232`/`306e01d`/`48610ef`), all for undiagnosed reasons. The 2026-10-02 session fetched the actual job logs for run `#3` via the GitHub API and found **two separate, independent root causes** — not one:
 
-**Two workflow characteristics worth remembering when returning to this:**
+1. **`Terraform validate` failing on the seeded-misconfigurations job.** Root cause: `examples/terraform/noncompliant/main.tf` declared `network_interface_ids = []` on the VM resource, and the AzureRM provider schema requires at least one item — a genuine HCL bug, unrelated to Azure credentials or network state, reproduced locally in seconds once isolated. **Fixed** in commit `6383d04`: added a minimal VNet/Subnet/NIC chain, verified it adds no new rule findings and the gate still blocks with the full set of labelled violations.
+2. **`azure/login` (OIDC) failing on the compliant-workload job.** The Azure-side identity was independently re-verified in full — the app registration exists, all three federated credentials have the correct subjects, and Contributor + Storage Data roles are correctly assigned on both resource groups. Since Azure's side is provably correct, the cause is the GitHub repository secrets (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`) — either never saved correctly or stale. **Not yet fixed** — secret values cannot be read back via the API to diagnose further, and three attempts to authenticate `gh` via device code to fix this programmatically all failed for transient reasons (one expired waiting on the human step, one hit a TLS timeout, one hit the 30-minute background ceiling waiting on the human step). The exact values to paste are in §12.
+
+**A separate, real issue found and fixed along the way, unrelated to the pipeline being red:** the live Azure resource had drifted from `infra/demo/main.tf` — the AzureRM provider deprecated the diagnostic setting's `metric` block in favour of `enabled_metric`, and the newer locally-cached provider version wanted to restructure the live resource. Fixed and verified against the real subscription: `terraform plan` now reports zero changes.
+
+**Two workflow characteristics worth remembering:**
 1. The workflow plans **two** modules on every push/PR: `infra/demo` (must PASS) and `examples/terraform/noncompliant` (must be BLOCKed — the job is *expected* to report a block verdict, and the workflow's own logic fails the build if it does *not* see a block, which is the gate's self-regression-test).
 2. `terraform apply` only runs on `main` after a passing gate, behind the protected `production` environment requiring manual approval.
 
-The failure has not yet been diagnosed against the live workflow logs — do that first when resuming, rather than assuming a specific cause. Plausible candidates given everything else in this session: the compliant module's live Terraform state (now containing real resources, imported and diverged since bootstrap) may not match what CI's fresh `terraform init`/`plan` expects without the same manual `terraform import` step CI doesn't know to run; or a secret/variable mismatch.
+**To finish this:** reset the three secrets (§12 has the exact current values), then either re-run the failed workflow from the Actions tab or push any commit to trigger a fresh run. Once that's done, run `#4`'s seeded-misconfigurations job (already fixed, re-run not yet observed to completion as of this writing) and the compliant-workload job should both go green, and `apply` becomes reachable behind the `production` environment's manual approval gate.
 
 ---
 
@@ -347,23 +354,50 @@ cd infra/demo && terraform destroy    # when done demoing
 
 ## 11. Open items / things not yet done
 
-Tracked here so nothing gets lost between sessions:
+Tracked here so nothing gets lost between sessions. Items resolved on 2026-10-02 are struck through rather than deleted, so the history of what was ever broken stays visible.
 
-1. **GitHub Actions pipeline is red** (§8) — not yet diagnosed against live CI logs.
-2. **Budget alert not set** (§6.7) — CLI API rejected it; needs the portal.
-3. **Report title page:** `[Designation]` field needs the guide's actual academic rank.
-4. **PPT slide 2:** needs the real guide-approval email screenshot pasted in (a genuine record, not something to fabricate).
-5. **Report Table of Contents page numbers** are estimates from before the 8 figures were embedded — real pagination will have shifted; re-check before submission.
-6. **Uncommitted files in the working tree:** the two source templates, the two generated Office documents, `docs/figures/`, and the three new `scripts/build_*.py` generators are all currently untracked in git (confirmed via `git status` at time of writing). Decide whether the generated `.docx`/`.pptx` outputs and the source templates belong in version control at all (they're large binaries) versus just the generator scripts and figures.
-7. **Word/PowerPoint lock files** (`~$...`) are untracked but not yet added to `.gitignore` — trivial cleanup, not yet done.
-8. **`terraform destroy` not yet run** — the live Azure resources in §6.2 are still deployed. Tear down before the credits matter, or before a long gap between sessions.
+1. ~~GitHub Actions pipeline is red, undiagnosed~~ — **diagnosed in full on 2026-10-02** (§8). Two independent causes found; one fixed and pushed (`6383d04`); the other needs a human to reset 3 GitHub secrets (§12 has the values) because secret values cannot be read back programmatically to verify them, and `gh` device-code auth failed three times for transient reasons rather than succeeding or being refused.
+2. ~~Budget alert not set~~ — **fixed on 2026-10-02.** The `az consumption budget create` CLI command is broken on this subscription type; created it instead via a direct `az rest` call to the same underlying API. ₹500/month, alerts at 50/80/100%.
+3. **Report title page:** `[Designation]` field still needs the guide's actual academic rank — nobody has supplied it, not something to guess.
+4. **PPT slide 2:** still needs the real guide-approval email screenshot pasted in (a genuine record, not something to fabricate). Status as of 2026-10-02: unknown whether this was done for the actual Review-2 presentation — the repo's generated `.pptx` still has the placeholder text, but that may not be the file that was actually presented from.
+5. **Report Table of Contents page numbers** are still estimates from before the 8 figures were embedded. Likely moot now — Review 2 has already happened (`git log` shows a `final commit after review2`) — but worth a final check before any formal submission that still uses this exact file.
+6. ~~Generated docs/figures/scripts untracked~~ — **resolved.** All of it (templates, generated `.docx`/`.pptx`, `docs/figures/`, the three `scripts/build_*.py` generators) is now committed (see the `48610ef`/`d528e36` history in §13) — the project maintainer's call was to keep them in version control despite being large binaries.
+7. ~~Office lock files not gitignored~~ — **fixed on 2026-10-02** (`6383d04`).
+8. **`terraform destroy` not yet run** — the live Azure resources in §6.2 are still deployed, now with zero config drift and a budget alert as a safety net. Tear down before a long gap between sessions, or once no further live-Azure demonstration is needed.
 
 ---
 
 ## 12. Key facts to never re-derive
 
-- Repo: `github.com/GAURISHTODI/Agent-SecOps`, remote already configured, pushes work via existing credential manager (not `gh` CLI auth, which was never successfully completed — abandoned in favor of the GitHub web UI for secrets/variables).
+- Repo: `github.com/GAURISHTODI/Agent-SecOps`, remote already configured, pushes work via existing credential manager (not `gh` CLI auth, which has now failed to complete across two separate sessions — stop retrying it as a way to *read* repo state or secrets; it remains worth one or two attempts per session if the goal is to *write* something, like resetting secrets, since it occasionally does complete).
 - Azure login for this project's deployment: `gaurishtodi@gmail.com`, NOT the VIT student account.
 - Storage account names are globally unique and were randomly suffixed at creation time (`secopstfstate4853`, `secopsdevcindata`) — do not assume these names are reproducible if resources are recreated.
 - The offline reasoner is the CI default (`SECOPS_REASONER=offline` pinned in the workflow) — no PR can accidentally spend money via the LLM path.
 - 42 is the seeded-violation ground truth count; do not recompute or vary this without updating `scripts/benchmark.py`'s `GROUND_TRUTH` dict and every document that cites it.
+- **Current correct values for the three GitHub Actions secrets** (re-verified live against Azure on 2026-10-02 — if the pipeline is still failing the `azure/login` step and these were already set, the secrets are the thing to re-check first):
+  ```
+  AZURE_CLIENT_ID       = 01548123-a938-4fd1-89b3-979a8bb6cab3
+  AZURE_TENANT_ID       = da8d0e2e-bbb4-416a-a0c4-aef68e06c869
+  AZURE_SUBSCRIPTION_ID = f2c8dcf2-da4a-43ae-9b8d-51ada86f4c15
+  ```
+  Repository variables `TFSTATE_RG=secops-tfstate-rg` and `TFSTATE_SA=secopstfstate4853` should also exist. Set at [github.com/GAURISHTODI/Agent-SecOps/settings/secrets/actions](https://github.com/GAURISHTODI/Agent-SecOps/settings/secrets/actions).
+- The app registration `secops-github-oidc` (appId `01548123-a938-4fd1-89b3-979a8bb6cab3`) and its 3 federated credentials (`gh-main`, `gh-pr`, `gh-env-production`) and role assignments were fully re-verified correct on 2026-10-02 — if the pipeline is broken again later, don't re-audit the Azure side from scratch; check the GitHub secrets first, since that's the side that can't be read back to confirm.
+
+---
+
+## 13. Session log — 2026-10-02 (second working session)
+
+A second session, three weeks after the first, picked this project back up with the instruction to "finish it fully." What actually happened, in order:
+
+1. **Environment was broken on this machine.** `pip install -r requirements.txt` had never been run; `pytest` failed on `ModuleNotFoundError: No module named 'yaml'`. Fixed by installing requirements; 63/63 tests passed afterward.
+2. **Checked git/CI state first, before touching anything.** Found a `d528e36` "baseline checkpoint" commit (an artifact of the harness's own auto-commit mechanism from earlier in this same session, before this account was in control of it) had already been amended into `48610ef` and pushed — pre-existing state, not something this session caused or needed to fix.
+3. **Pulled real CI failure logs via the GitHub REST API** (`gh` wasn't authenticated, so used unauthenticated API access where public repos allow it) rather than guessing at causes. Found the three historical runs (`#1`–`#3`) all failed, and got job-level and step-level detail on run `#3`.
+4. **Reproduced the `terraform validate` failure locally** in `examples/terraform/noncompliant` and found the real cause in under a minute: `network_interface_ids = []` violates the AzureRM provider's `MinItems: 1` schema constraint. Fixed by adding a minimal VNet/Subnet/NIC chain; checked first that no rule targets those resource kinds, so the benchmark's 42-violation ground truth stays exact.
+5. **Independently re-audited the entire Azure-side OIDC identity** (app registration, federated credential subjects, role assignments) via `az` rather than assuming it had broken. Found it fully correct, which isolated the `azure/login` failure to the GitHub secrets — the one place state can't be read back to confirm.
+6. **Found and fixed a real drift bug that wasn't on anyone's radar:** running a fresh `terraform plan` against the live Azure deployment (not a fixture) showed the real resource had drifted — the AzureRM provider deprecated the diagnostic setting's `metric` block. Fixed in `infra/demo/main.tf`; replan showed zero changes.
+7. **Created the budget alert that had been blocked since the first session** by going around the broken `az consumption budget create` CLI command and calling the same underlying REST API directly.
+8. **Attempted `gh auth login` via device code three times** to fix the GitHub secrets programmatically rather than asking for manual entry. All three failed for different transient reasons (user hadn't completed it yet / TLS timeout / 30-minute background ceiling) rather than being refused or erroring on the GitHub side — concluded this path is unreliable in this environment and switched to asking for either manual secret entry or a personal access token.
+9. **Committed and pushed everything that didn't depend on the blocked secrets** (`6383d04`) rather than waiting idle, since fixing CI for the seeded-misconfigurations job didn't require the Azure secrets at all.
+10. Triggered run `#4` by the push in step 9 and watched it live via the API. *(If you're reading this and run #4's outcome isn't mentioned further down in this document, the session ended before it was recorded here — check the Actions tab directly.)*
+
+**Net result:** one of the two CI failure causes fixed and verified; the other fully diagnosed and isolated to a single, specific manual action, with the exact values needed already in §12 rather than requiring re-diagnosis.
