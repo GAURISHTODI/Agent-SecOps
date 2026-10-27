@@ -106,3 +106,42 @@ def test_module_address_is_recorded():
         ["create"], {"name": "x"},
     )))
     assert plan.resources[0].module == "module.network"
+
+
+def _plan_with_provider_region(rtype, after, provider="aws", region="sa-east-1"):
+    return {
+        "format_version": "1.2",
+        "configuration": {
+            "provider_config": {
+                provider: {
+                    "name": provider,
+                    "expressions": {"region": {"constant_value": region}},
+                }
+            }
+        },
+        "resource_changes": [
+            {
+                "address": rtype + ".x",
+                "type": rtype,
+                "name": "x",
+                "change": {"actions": ["create"], "after": after},
+            }
+        ],
+    }
+
+
+def test_provider_level_region_is_inherited_by_regional_resources():
+    plan = parse_plan(_plan_with_provider_region("aws_s3_bucket", {"bucket": "b"}))
+    assert plan.resources[0].after["region"] == "sa-east-1"
+
+
+def test_resource_own_region_wins_over_provider_region():
+    plan = parse_plan(
+        _plan_with_provider_region("aws_db_instance", {"region": "us-east-1"})
+    )
+    assert plan.resources[0].after["region"] == "us-east-1"
+
+
+def test_global_iam_resources_do_not_inherit_a_region():
+    plan = parse_plan(_plan_with_provider_region("aws_iam_role", {"name": "r"}))
+    assert "region" not in plan.resources[0].after

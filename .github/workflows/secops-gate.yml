@@ -95,6 +95,15 @@ jobs:
           - name: seeded-misconfigurations
             dir: examples/terraform/noncompliant
             expect: block
+          # AWS and GCP use dummy credentials and skip every provider API
+          # check, so these plan fully offline: real `terraform show -json`
+          # output from three clouds goes through the same gate.
+          - name: seeded-aws
+            dir: examples/terraform/aws_noncompliant
+            expect: block
+          - name: seeded-gcp
+            dir: examples/terraform/gcp_noncompliant
+            expect: block
     steps:
       - uses: actions/checkout@v4
 
@@ -110,8 +119,10 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # Azure login is needed only for the module with a real backend. The
-      # seeded module has no backend and is planned entirely offline.
+      # `azure/login` is needed only for the module with a real backend. The
+      # seeded Azure module has no backend, but the AzureRM provider still
+      # authenticates (via the ARM_* OIDC env vars below) before it will plan;
+      # the AWS and GCP seeded modules need no cloud login at all.
       - name: Azure login (OIDC, no stored secret)
         if: matrix.dir == 'infra/demo'
         uses: azure/login@v2

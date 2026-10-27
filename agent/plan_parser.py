@@ -170,6 +170,42 @@ def _module_of(address: str) -> str:
     return "root"
 
 
+def _provider_regions(data: Dict[str, Any]) -> Dict[str, str]:
+    """Map provider name (aws, google, ...) to its configured default region.
+
+    In a real `terraform show -json` plan the region of an AWS or GCP
+    resource usually lives on the provider block, not on the resource, so a
+    rule that only looks at the resource would never see it.
+    """
+    configs = (data.get("configuration") or {}).get("provider_config") or {}
+    regions: Dict[str, str] = {}
+    for cfg in configs.values():
+        name = cfg.get("name")
+        exprs = cfg.get("expressions") or {}
+        for key in ("region", "location"):
+            value = (exprs.get(key) or {}).get("constant_value")
+            if name and isinstance(value, str) and value:
+                regions.setdefault(name, value)
+    return regions
+
+
+# Providers whose resources inherit the provider-level region, and the
+# resource-type prefixes that are global despite that (IAM has no region).
+_REGIONAL_PROVIDERS = {"aws": "aws_", "google": "google_"}
+_GLOBAL_PREFIXES = ("aws_iam_", "google_project_iam", "google_service_account")
+
+
+def _inherit_region(rtype: str, after: Dict[str, Any], regions: Dict[str, str]) -> None:
+    if after.get("region") or after.get("location"):
+        return
+    if rtype.startswith(_GLOBAL_PREFIXES):
+        return
+    for provider, prefix in _REGIONAL_PROVIDERS.items():
+        if rtype.startswith(prefix) and provider in regions:
+            after["region"] = regions[provider]
+            return
+
+
 def parse_plan(data: Dict[str, Any]) -> PlanSummary:
     """Turn a decoded plan JSON document into a `PlanSummary`."""
     if not isinstance(data, dict):
@@ -183,6 +219,7 @@ def parse_plan(data: Dict[str, Any]) -> PlanSummary:
 
     resources: List[Resource] = []
     providers: List[Provider] = []
+    regions = _provider_regions(data)
     for rc in changes:
         rtype = rc.get("type", "")
         change = rc.get("change", {}) or {}
@@ -190,6 +227,8 @@ def parse_plan(data: Dict[str, Any]) -> PlanSummary:
         if action in (Action.NOOP, Action.READ):
             continue  # nothing is being provisioned; nothing to gate
         provider = detect_provider(rtype)
+        after = dict(change.get("after") or {})
+        _inherit_region(rtype, after, regions)
         if provider not in providers and provider != Provider.UNKNOWN:
             providers.append(provider)
         resources.append(
@@ -200,7 +239,7 @@ def parse_plan(data: Dict[str, Any]) -> PlanSummary:
                 provider=provider,
                 kind=classify(rtype),
                 action=action,
-                after=change.get("after") or {},
+                after=after,
                 before=change.get("before") or {},
                 module=_module_of(rc.get("address", "")),
             )
