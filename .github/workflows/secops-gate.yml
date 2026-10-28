@@ -20,9 +20,11 @@ on:
   pull_request:
     paths:
       - "infra/**"
-      - "examples/terraform/**"
+      - "examples/**"
       - "policies/**"
       - "agent/**"
+      - "tests/**"
+      - "scripts/benchmark.py"
   push:
     branches: [main]
   workflow_dispatch:
@@ -70,6 +72,9 @@ jobs:
       - name: Run tests
         run: python -m pytest tests/ -q
 
+      - name: Detection benchmark (fixtures + real plans)
+        run: python scripts/benchmark.py --markdown benchmark.md && cat benchmark.md >> $GITHUB_STEP_SUMMARY
+
       - name: Publish rule catalogue to the job summary
         run: |
           echo "### Active rule catalogue" >> $GITHUB_STEP_SUMMARY
@@ -103,6 +108,20 @@ jobs:
             expect: block
           - name: seeded-gcp
             dir: examples/terraform/gcp_noncompliant
+            expect: block
+          # A tangled three-tier graph for the dependency-graph layer.
+          - name: seeded-aws-mesh
+            dir: examples/terraform/aws_mesh
+            expect: block
+          # Harmless alone, dangerous together: graph-layer showcases.
+          - name: seeded-aws-thousand-cuts
+            dir: examples/terraform/aws_thousand_cuts
+            expect: block
+          - name: seeded-aws-shared-trust
+            dir: examples/terraform/aws_shared_trust
+            expect: block
+          - name: seeded-aws-risk-spectrum
+            dir: examples/terraform/aws_risk_spectrum
             expect: block
     steps:
       - uses: actions/checkout@v4

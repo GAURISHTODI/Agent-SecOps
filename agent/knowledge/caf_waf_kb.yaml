@@ -120,7 +120,7 @@ pillars:
 # The reasoner uses this to build a minimal, targeted prompt.
 kind_focus:
   object_storage:
-    pillars: [WAF:Security, WAF:Reliability, CAF:Governance, WAF:Sustainability]
+    pillars: [WAF:Security, WAF:Reliability, CAF:Governance, CAF:LandingZone, WAF:Sustainability]
     watch_for:
       - "Shared access keys enabled when Entra ID / IAM auth would do."
       - "Versioning or change feed disabled on a bucket holding irreplaceable data."
@@ -143,7 +143,7 @@ kind_focus:
       - "Any-to-any allow rule, or a rule with a very low priority number that shadows denies."
       - "Management ports (22/3389) reachable from the internet without a bastion."
   secret_store:
-    pillars: [WAF:Security, WAF:Reliability, CAF:Identity]
+    pillars: [WAF:Security, WAF:Reliability, CAF:Identity, CAF:LandingZone]
     watch_for:
       - "Access policies granting broad key/secret permissions to a wide principal."
       - "Public network access left on for a vault holding production keys."

@@ -84,7 +84,7 @@ echo $LASTEXITCODE      # 2 = block
 ## 1.4 The rest of the local surface
 
 ```powershell
-python -m pytest tests/ -q                    # 63 tests
+python -m pytest tests/ -q                    # 146 tests
 python -m agent.cli rules                     # the 22-rule catalogue
 python -m agent.cli explain WAF-SEC-004       # why one rule exists
 python scripts/benchmark.py                   # detection + false-positive numbers
@@ -143,7 +143,7 @@ The frontend needs an internet connection **the first time it loads**, to fetch 
 3. **Toggle "Reasoning layer" off.** Watch the orange segment vanish from the "Which layer found what" chart and the reasoning findings disappear from the list. Turn it back on and they return.
    > *"Everything orange is a violation that no hand-written rule catches. That is the contribution of this project, and you are watching it appear and disappear."*
 4. Switch to **AWS** and then **GCP** — same rules, same verdict logic, different cloud.
-5. Open the **Benchmark** tab: 88.1% with rules alone, 100% with reasoning, zero false positives.
+5. Open the **Benchmark** tab: 78.6% with rules alone, 100% with reasoning, zero false positives.
 
 Step 3 is the moment worth rehearsing.
 

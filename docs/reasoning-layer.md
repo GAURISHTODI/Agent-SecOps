@@ -30,7 +30,13 @@ Input: the planned resources, the dependency edges from the plan, and the
 
 1. **Build the graph.** Nodes = resources; edges = references; undirected
    (exposure flows both ways along a link). Shared hubs (resource groups) are
-   removed, otherwise everything looks connected to everything.
+   removed, otherwise everything looks connected to everything. Connector
+   resources with no findings of their own (security-group rules, NSG
+   associations) become direct links between their neighbours, so a rule
+   joining two groups is one hop, not two; explanations still name the
+   connector (`a -[via rule]-> b`). References into child modules (`var.x`)
+   are followed back to what the parent passed in, so modules owned by
+   different teams stay connected through shared resources.
 2. **Turn evidence into signals.**
    - *Exposure* `e` comes from findings of exposure rules:
      open ingress 0.90, anonymous access 0.90, public network access 0.60,
@@ -90,9 +96,10 @@ reaches the SQL server (risk 0.79, connection adds 0.25).
   on an independent set.
 - **It needs a real plan.** Hand-written fixtures carry no `configuration`
   block, so they have no edges and Layer 2b stays silent on them. The
-  benchmark numbers (37/42 -> 42/42) therefore do not include it. Its evidence
-  is the real-plan runs, which is a small sample (AWS: 1 compound finding;
-  Azure: 1; GCP: 0, because that module has no linked resources).
+  benchmark numbers (33/42 -> 42/42) do not include it. Its evidence
+  is the committed real plans in `examples/plans/real/`, which is a small
+  sample (AWS: 1 compound finding; Azure: 2; GCP: 0, because that module has
+  no linked resources).
 - **Only references Terraform records are edges.** Network reachability that
   is not expressed as a reference (e.g. same VPC by convention) is invisible.
 - **Not yet evaluated for precision on independent code.**
@@ -100,3 +107,17 @@ reaches the SQL server (risk 0.79, connection adds 0.25).
 Tests: `tests/test_graph.py` (9 tests) cover propagation, no-edge silence,
 hub removal, distance decay, clean targets, governance-noise exclusion, the
 uplift gate, edge extraction and engine integration.
+
+`tests/test_graph_complex.py` covers three seeded "harmless alone, dangerous
+together" modules planned by real terraform (`examples/plans/real/`):
+
+| Module | Story | On its own | Together |
+|---|---|---|---|
+| `aws_mesh` | an internet-facing group reaches the orders DB through a one-line debug rule and, separately, through a KMS key shared with a public DB | 0.47 / 0.36 | 0.64 HIGH |
+| `aws_thousand_cuts` | six public IPs, each a medium note, reach a private DB that reuses the web tier's security group | 1 door: 0.19 (not reported) | 6 doors: 0.66 HIGH |
+| `aws_shared_trust` | three teams' modules, each clean on review, joined only by a shared security group and KMS key | each team: nothing | all three: 0.67 HIGH |
+| `aws_risk_spectrum` | one internet-facing group; databases 1, 2, 3 and 4 hops away (16 nodes) | 4 hops: 0.00, 3 hops: 0.32 (not reported) | 2 hops: 0.42 LOW / 0.47 MEDIUM, 1 hop: 0.63 HIGH |
+
+It also has synthetic stress graphs: an 8-node chain (exact 3-hop cut-off),
+a 300-node ring, a 30-node complete graph, 50 weak neighbours and a
+200-member resource group.

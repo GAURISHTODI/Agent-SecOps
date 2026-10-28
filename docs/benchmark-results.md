@@ -1,42 +1,88 @@
 # Agent SecOps -- Benchmark Results
 
-Measured against the seeded misconfiguration test set in `examples/plans/`, with ground truth labelled in `scripts/benchmark.py`.
+Ground truth is labelled in `scripts/benchmark.py`. A seeded violation counts as detected only when the specific rule or reasoning probe named for it fires on the right resource.
 
-## Headline numbers
+## Hand-written fixtures
+
+Plans in `examples/plans/`, written by hand to mirror the seeded modules.
 
 | Metric | Value |
 |---|---|
 | Seeded violations across all three clouds | 42 |
-| Detected by deterministic rules alone | 37 (88.1%) |
+| Detected by deterministic rules alone | 33 (78.6%) |
 | Detected with the reasoning layer | 42 (100.0%) |
-| **Violations recovered by reasoning alone** | **5** |
-| False positives on the compliant plan | 0 |
-| Total evaluation wall-clock | 0.07 s |
-
-The uplift row is the research claim in one number: those violations are visible in framework guidance but are not expressed by any hand-written rule, which is exactly the class a static scanner misses.
-
-## Per-plan breakdown
+| **Violations recovered by reasoning alone** | **9** |
+| False positives on the compliant plan (verdict-affecting) | 0 |
+| Low-severity advisories on the compliant plan | 0 |
 
 | Plan | Seeded | Rules only | + Reasoning | Verdict | Time |
 |---|---|---|---|---|---|
-| `azure_noncompliant.plan.json` | 28 | 25 | 28 | BLOCK | 10 ms |
+| `azure_noncompliant.plan.json` | 28 | 21 | 28 | BLOCK | 9 ms |
 | `aws_noncompliant.plan.json` | 8 | 7 | 8 | BLOCK | 9 ms |
-| `gcp_noncompliant.plan.json` | 6 | 5 | 6 | BLOCK | 9 ms |
+| `gcp_noncompliant.plan.json` | 6 | 5 | 6 | BLOCK | 8 ms |
 
-## What the reasoning layer recovered
+**Recovered by the reasoning layer:**
 
+- `azure_noncompliant.plan.json`: network default allow
+- `azure_noncompliant.plan.json`: shared keys enabled
+- `azure_noncompliant.plan.json`: versioning disabled
 - `azure_noncompliant.plan.json`: firewall spans all IPv4
+- `azure_noncompliant.plan.json`: password auth enabled
 - `azure_noncompliant.plan.json`: no availability zone
 - `azure_noncompliant.plan.json`: access policies not RBAC
 - `aws_noncompliant.plan.json`: versioning disabled
 - `gcp_noncompliant.plan.json`: versioning disabled
 
-## Known gaps (not yet detected)
+**Known gaps (not yet detected):**
 
 _All seeded violations are currently detected._
 
-## False positives on the compliant module
+**Compliant module:**
 
-- `azure_compliant.plan.json`: 0 false positive(s), verdict PASS
+- `azure_compliant.plan.json`: verdict PASS, 0 verdict-affecting false positive(s), 0 low-severity advisory finding(s)
 
-A gate that fails clean code gets disabled by the team that owns it, so this number matters as much as the detection rate.
+## Real terraform plan output
+
+Plans in `examples/plans/real/`, produced by `terraform plan` + `terraform show -json` on the seeded modules in `examples/terraform/` and the compliant module in `infra/demo/`. This is the input shape the CI pipeline gives the gate.
+
+| Metric | Value |
+|---|---|
+| Seeded violations across all three clouds | 42 |
+| Detected by deterministic rules alone | 33 (78.6%) |
+| Detected with the reasoning layer | 42 (100.0%) |
+| **Violations recovered by reasoning alone** | **9** |
+| False positives on the compliant plan (verdict-affecting) | 0 |
+| Low-severity advisories on the compliant plan | 1 |
+
+| Plan | Seeded | Rules only | + Reasoning | Verdict | Time |
+|---|---|---|---|---|---|
+| `azure_noncompliant.plan.json` | 28 | 21 | 28 | BLOCK | 9 ms |
+| `aws_noncompliant.plan.json` | 8 | 7 | 8 | BLOCK | 11 ms |
+| `gcp_noncompliant.plan.json` | 6 | 5 | 6 | BLOCK | 8 ms |
+
+**Recovered by the reasoning layer:**
+
+- `azure_noncompliant.plan.json`: network default allow
+- `azure_noncompliant.plan.json`: shared keys enabled
+- `azure_noncompliant.plan.json`: versioning disabled
+- `azure_noncompliant.plan.json`: firewall spans all IPv4
+- `azure_noncompliant.plan.json`: password auth enabled
+- `azure_noncompliant.plan.json`: no availability zone
+- `azure_noncompliant.plan.json`: access policies not RBAC
+- `aws_noncompliant.plan.json`: versioning disabled
+- `gcp_noncompliant.plan.json`: versioning disabled
+
+**Known gaps (not yet detected):**
+
+_All seeded violations are currently detected._
+
+**Compliant module:**
+
+- `azure_compliant.plan.json`: verdict PASS, 0 verdict-affecting false positive(s), 1 low-severity advisory finding(s)
+  - WAF-SEC-005 on azurerm_storage_account.data (low)
+
+## Reading these numbers
+
+- The offline reasoning layer is a set of deterministic, hand-written probes derived from the framework knowledge base. "Recovered by reasoning" therefore means "caught by a framework-intent probe that no Layer-1 rule implements", not "discovered by a language model".
+- The seeded modules were written by the same team that wrote the rules and probes, so recall on them is an upper bound. An independent test set is the obvious next step.
+- Total evaluation wall-clock: 0.16 s.

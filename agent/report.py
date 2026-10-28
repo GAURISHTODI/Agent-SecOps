@@ -11,6 +11,7 @@ rule/pillar was violated and a suggested fix, not just a fail flag.
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from typing import Dict, List
 
@@ -175,9 +176,15 @@ def render_sarif(result: GateResult) -> str:
     seen: Dict[str, Dict] = {}
     results = []
     for f in result.active:
-        if f.rule_id not in seen:
-            seen[f.rule_id] = {
-                "id": f.rule_id,
+        # Every reasoning probe shares one rule_id, so SARIF would merge them
+        # into a single rule named after whichever came first. Key them by
+        # title as well so each stays a distinct alert type.
+        sarif_id = f.rule_id if f.source == "rules" else "{}/{}".format(
+            f.rule_id, re.sub(r"[^a-z0-9]+", "-", f.title.lower()).strip("-")
+        )
+        if sarif_id not in seen:
+            seen[sarif_id] = {
+                "id": sarif_id,
                 "name": f.title,
                 "shortDescription": {"text": f.title},
                 "fullDescription": {"text": f.remediation},
@@ -185,7 +192,7 @@ def render_sarif(result: GateResult) -> str:
             }
         results.append(
             {
-                "ruleId": f.rule_id,
+                "ruleId": sarif_id,
                 "level": level_map[f.severity],
                 "message": {
                     "text": "{} [{}] {} Fix: {}".format(
@@ -201,7 +208,7 @@ def render_sarif(result: GateResult) -> str:
                     }
                 ],
                 "partialFingerprints": {
-                    "resourceRule": "{}::{}".format(f.resource_address, f.rule_id)
+                    "resourceRule": "{}::{}".format(f.resource_address, sarif_id)
                 },
             }
         )
@@ -215,7 +222,7 @@ def render_sarif(result: GateResult) -> str:
                     "tool": {
                         "driver": {
                             "name": "Agent SecOps",
-                            "informationUri": "https://github.com/",
+                            "informationUri": "https://github.com/GAURISHTODI/Agent-SecOps",
                             "rules": list(seen.values()),
                         }
                     },

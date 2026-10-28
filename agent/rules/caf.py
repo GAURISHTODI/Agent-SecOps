@@ -94,6 +94,18 @@ class NamingConvention(Rule):
         )
 
 
+def _same_region(location: str, approved: str) -> bool:
+    """Exact region match, also accepting a zone inside that region.
+
+    A plain prefix test would accept "eastus2" for "eastus", which are
+    different regions. Zones are spelled "us-east-1a" on AWS and
+    "us-east1-b" on GCP, so a single trailing zone letter is allowed.
+    """
+    if location == approved:
+        return True
+    return bool(re.fullmatch(re.escape(approved) + r"-?[a-z]", location))
+
+
 @register
 class ApprovedRegion(Rule):
     id = "CAF-LZ-001"
@@ -133,7 +145,7 @@ class ApprovedRegion(Rule):
             return None
         approved = self._approved_for(resource)
         norm = location.lower().replace(" ", "")
-        if any(norm.startswith(a) for a in approved):
+        if any(_same_region(norm, a) for a in approved):
             return None
         return (
             'Deploys to region "{}", which is not in the approved landing-zone '
@@ -199,7 +211,8 @@ class BudgetGovernance(Rule):
             or resource.after.get("instance_type")
             or resource.after.get("instance_class")   # AWS RDS
             or resource.after.get("machine_type")
-            or resource.after.get("tier")             # GCP Cloud SQL
+            or resource.after.get("tier")
+            or resource.get("settings.tier")          # GCP Cloud SQL
             or "unspecified"
         )
         return (

@@ -1,0 +1,1098 @@
+{
+ "applyable": true,
+ "checks": [
+  {
+   "address": {
+    "kind": "var",
+    "name": "environment",
+    "to_display": "var.environment"
+   },
+   "instances": [
+    {
+     "address": {
+      "to_display": "var.environment"
+     },
+     "status": "pass"
+    }
+   ],
+   "status": "pass"
+  },
+  {
+   "address": {
+    "kind": "var",
+    "name": "location",
+    "to_display": "var.location"
+   },
+   "instances": [
+    {
+     "address": {
+      "to_display": "var.location"
+     },
+     "status": "pass"
+    }
+   ],
+   "status": "pass"
+  },
+  {
+   "address": {
+    "kind": "var",
+    "name": "workload",
+    "to_display": "var.workload"
+   },
+   "instances": [
+    {
+     "address": {
+      "to_display": "var.workload"
+     },
+     "status": "pass"
+    }
+   ],
+   "status": "pass"
+  }
+ ],
+ "complete": true,
+ "configuration": {
+  "provider_config": {
+   "azurerm": {
+    "expressions": {
+     "features": [
+      {}
+     ],
+     "storage_use_azuread": {
+      "constant_value": true
+     },
+     "use_oidc": {
+      "references": [
+       "var.use_oidc"
+      ]
+     }
+    },
+    "full_name": "registry.terraform.io/hashicorp/azurerm",
+    "name": "azurerm",
+    "version_constraint": "~> 4.0"
+   }
+  },
+  "root_module": {
+   "outputs": {
+    "log_analytics_workspace_id": {
+     "description": "Workspace collecting diagnostics (satisfies WAF-OPS-001).",
+     "expression": {
+      "references": [
+       "azurerm_log_analytics_workspace.law.id",
+       "azurerm_log_analytics_workspace.law"
+      ]
+     }
+    },
+    "monthly_cost_note": {
+     "description": "Reminder of the intended spend envelope for this module.",
+     "expression": {
+      "constant_value": "Demo footprint only: storage (few MB) + free-tier Log Analytics. Run scripts/azure-destroy.sh to return to zero."
+     }
+    },
+    "resource_group_name": {
+     "description": "Resource group holding the demo workload.",
+     "expression": {
+      "references": [
+       "azurerm_resource_group.rg.name",
+       "azurerm_resource_group.rg"
+      ]
+     }
+    },
+    "storage_account_name": {
+     "description": "Storage account the gate reasons about.",
+     "expression": {
+      "references": [
+       "azurerm_storage_account.data.name",
+       "azurerm_storage_account.data"
+      ]
+     }
+    }
+   },
+   "resources": [
+    {
+     "address": "azurerm_log_analytics_workspace.law",
+     "expressions": {
+      "daily_quota_gb": {
+       "references": [
+        "var.log_daily_quota_gb"
+       ]
+      },
+      "location": {
+       "references": [
+        "azurerm_resource_group.rg.location",
+        "azurerm_resource_group.rg"
+       ]
+      },
+      "name": {
+       "references": [
+        "local.prefix"
+       ]
+      },
+      "resource_group_name": {
+       "references": [
+        "azurerm_resource_group.rg.name",
+        "azurerm_resource_group.rg"
+       ]
+      },
+      "retention_in_days": {
+       "constant_value": 30
+      },
+      "sku": {
+       "constant_value": "PerGB2018"
+      },
+      "tags": {
+       "references": [
+        "local.common_tags"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "law",
+     "provider_config_key": "azurerm",
+     "schema_version": 3,
+     "type": "azurerm_log_analytics_workspace"
+    },
+    {
+     "address": "azurerm_monitor_diagnostic_setting.storage",
+     "expressions": {
+      "enabled_metric": [
+       {
+        "category": {
+         "constant_value": "Transaction"
+        }
+       }
+      ],
+      "log_analytics_workspace_id": {
+       "references": [
+        "azurerm_log_analytics_workspace.law.id",
+        "azurerm_log_analytics_workspace.law"
+       ]
+      },
+      "name": {
+       "references": [
+        "local.prefix"
+       ]
+      },
+      "target_resource_id": {
+       "references": [
+        "azurerm_storage_account.data.id",
+        "azurerm_storage_account.data"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "storage",
+     "provider_config_key": "azurerm",
+     "schema_version": 0,
+     "type": "azurerm_monitor_diagnostic_setting"
+    },
+    {
+     "address": "azurerm_resource_group.rg",
+     "expressions": {
+      "location": {
+       "references": [
+        "var.location"
+       ]
+      },
+      "name": {
+       "references": [
+        "local.prefix"
+       ]
+      },
+      "tags": {
+       "references": [
+        "local.common_tags"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "rg",
+     "provider_config_key": "azurerm",
+     "schema_version": 0,
+     "type": "azurerm_resource_group"
+    },
+    {
+     "address": "azurerm_storage_account.data",
+     "expressions": {
+      "access_tier": {
+       "constant_value": "Hot"
+      },
+      "account_replication_type": {
+       "references": [
+        "var.replication_type"
+       ]
+      },
+      "account_tier": {
+       "constant_value": "Standard"
+      },
+      "allow_nested_items_to_be_public": {
+       "constant_value": false
+      },
+      "blob_properties": [
+       {
+        "delete_retention_policy": [
+         {
+          "days": {
+           "constant_value": 7
+          }
+         }
+        ],
+        "versioning_enabled": {
+         "constant_value": true
+        }
+       }
+      ],
+      "https_traffic_only_enabled": {
+       "constant_value": true
+      },
+      "location": {
+       "references": [
+        "azurerm_resource_group.rg.location",
+        "azurerm_resource_group.rg"
+       ]
+      },
+      "min_tls_version": {
+       "constant_value": "TLS1_2"
+      },
+      "name": {
+       "references": [
+        "local.prefix"
+       ]
+      },
+      "network_rules": [
+       {
+        "bypass": {
+         "constant_value": [
+          "AzureServices"
+         ]
+        },
+        "default_action": {
+         "references": [
+          "var.public_network_access"
+         ]
+        },
+        "ip_rules": {
+         "references": [
+          "var.allowed_ip_rules"
+         ]
+        }
+       }
+      ],
+      "public_network_access_enabled": {
+       "references": [
+        "var.public_network_access"
+       ]
+      },
+      "resource_group_name": {
+       "references": [
+        "azurerm_resource_group.rg.name",
+        "azurerm_resource_group.rg"
+       ]
+      },
+      "shared_access_key_enabled": {
+       "constant_value": false
+      },
+      "tags": {
+       "references": [
+        "local.common_tags"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "data",
+     "provider_config_key": "azurerm",
+     "schema_version": 4,
+     "type": "azurerm_storage_account"
+    }
+   ],
+   "variables": {
+    "allowed_ip_rules": {
+     "default": [],
+     "description": "Source IPs permitted through the storage firewall."
+    },
+    "cost_center": {
+     "default": "CC-1042",
+     "description": "Cost centre for budget attribution (CAF-COST-001)."
+    },
+    "environment": {
+     "default": "dev",
+     "description": "Environment tier. Drives both the naming standard and the cost rules."
+    },
+    "location": {
+     "default": "centralindia",
+     "description": "Azure region. Must be in the approved landing-zone list (CAF-LZ-001)."
+    },
+    "log_daily_quota_gb": {
+     "default": 0.1,
+     "description": "Hard daily ingestion cap on Log Analytics. 0.1 GB keeps the workspace\ninside the free tier permanently; ingestion simply stops rather than\nbilling once the cap is hit.\n"
+    },
+    "owner": {
+     "default": "platform-team@example.com",
+     "description": "Owning team email (CAF-GOV-001)."
+    },
+    "public_network_access": {
+     "default": false,
+     "description": "Whether the storage account is reachable from the public internet.\n\nDefaults to false, which is both free and compliant: disabling public\nnetwork access costs nothing, and it is what lets this module pass its\nown gate cleanly. A real landing zone would then add a private endpoint\nfor access -- we skip that because private endpoints cost roughly\nRs 600/month each, far more than the rest of this module combined, and\nnothing in the demo needs to read the blob.\n\nFlip this to true if you want to browse the container in the portal: the\ngate will immediately flag it as CAF-LZ-002 (HIGH) and block the deploy,\nwhich is a useful thing to demonstrate live.\n"
+    },
+    "region_short": {
+     "default": "cin",
+     "description": "Short region code for resource names."
+    },
+    "replication_type": {
+     "default": "LRS",
+     "description": "Storage replication. LRS is the cheapest and is fine below production;\nthe gate (WAF-REL-001) only demands ZRS/GRS for prod-tagged accounts,\nso the default here keeps demo spend at its floor.\n"
+    },
+    "use_oidc": {
+     "default": false,
+     "description": "Authenticate via GitHub OIDC federation (true in CI, false locally)."
+    },
+    "workload": {
+     "default": "secops",
+     "description": "Workload name used as the naming prefix (CAF-GOV-002)."
+    }
+   }
+  }
+ },
+ "errored": false,
+ "format_version": "1.2",
+ "output_changes": {
+  "log_analytics_workspace_id": {
+   "actions": [
+    "create"
+   ],
+   "after_sensitive": false,
+   "after_unknown": true,
+   "before": null,
+   "before_sensitive": false
+  },
+  "monthly_cost_note": {
+   "actions": [
+    "create"
+   ],
+   "after": "Demo footprint only: storage (few MB) + free-tier Log Analytics. Run scripts/azure-destroy.sh to return to zero.",
+   "after_sensitive": false,
+   "after_unknown": false,
+   "before": null,
+   "before_sensitive": false
+  },
+  "resource_group_name": {
+   "actions": [
+    "create"
+   ],
+   "after": "secops-dev-cin-rg",
+   "after_sensitive": false,
+   "after_unknown": false,
+   "before": null,
+   "before_sensitive": false
+  },
+  "storage_account_name": {
+   "actions": [
+    "create"
+   ],
+   "after": "secopsdevcindata",
+   "after_sensitive": false,
+   "after_unknown": false,
+   "before": null,
+   "before_sensitive": false
+  }
+ },
+ "planned_values": {
+  "outputs": {
+   "log_analytics_workspace_id": {
+    "sensitive": false
+   },
+   "monthly_cost_note": {
+    "sensitive": false,
+    "type": "string",
+    "value": "Demo footprint only: storage (few MB) + free-tier Log Analytics. Run scripts/azure-destroy.sh to return to zero."
+   },
+   "resource_group_name": {
+    "sensitive": false,
+    "type": "string",
+    "value": "secops-dev-cin-rg"
+   },
+   "storage_account_name": {
+    "sensitive": false,
+    "type": "string",
+    "value": "secopsdevcindata"
+   }
+  },
+  "root_module": {
+   "resources": [
+    {
+     "address": "azurerm_log_analytics_workspace.law",
+     "mode": "managed",
+     "name": "law",
+     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+     "schema_version": 3,
+     "sensitive_values": {
+      "identity": [],
+      "primary_shared_key": true,
+      "secondary_shared_key": true,
+      "tags": {}
+     },
+     "type": "azurerm_log_analytics_workspace",
+     "values": {
+      "allow_resource_only_permissions": true,
+      "cmk_for_query_forced": null,
+      "daily_quota_gb": 0.1,
+      "data_collection_rule_id": null,
+      "identity": [],
+      "immediate_data_purge_on_30_days_enabled": null,
+      "internet_ingestion_enabled": true,
+      "internet_query_enabled": true,
+      "local_authentication_enabled": true,
+      "location": "centralindia",
+      "name": "secops-dev-cin-law",
+      "reservation_capacity_in_gb_per_day": null,
+      "resource_group_name": "secops-dev-cin-rg",
+      "retention_in_days": 30,
+      "sku": "PerGB2018",
+      "tags": {
+       "costcenter": "CC-1042",
+       "environment": "dev",
+       "monitoring": "law",
+       "owner": "platform-team@example.com",
+       "project": "agent-secops"
+      },
+      "timeouts": null
+     }
+    },
+    {
+     "address": "azurerm_monitor_diagnostic_setting.storage",
+     "mode": "managed",
+     "name": "storage",
+     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+     "schema_version": 0,
+     "sensitive_values": {
+      "enabled_log": [],
+      "enabled_metric": [
+       {}
+      ],
+      "metric": []
+     },
+     "type": "azurerm_monitor_diagnostic_setting",
+     "values": {
+      "enabled_log": [],
+      "enabled_metric": [
+       {
+        "category": "Transaction"
+       }
+      ],
+      "eventhub_authorization_rule_id": null,
+      "eventhub_name": null,
+      "name": "secops-dev-cin-storage-diag",
+      "partner_solution_id": null,
+      "storage_account_id": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "azurerm_resource_group.rg",
+     "mode": "managed",
+     "name": "rg",
+     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+     "schema_version": 0,
+     "sensitive_values": {
+      "tags": {}
+     },
+     "type": "azurerm_resource_group",
+     "values": {
+      "location": "centralindia",
+      "managed_by": null,
+      "name": "secops-dev-cin-rg",
+      "tags": {
+       "costcenter": "CC-1042",
+       "environment": "dev",
+       "monitoring": "law",
+       "owner": "platform-team@example.com",
+       "project": "agent-secops"
+      },
+      "timeouts": null
+     }
+    },
+    {
+     "address": "azurerm_storage_account.data",
+     "identity": {
+      "name": null,
+      "resource_group_name": null,
+      "subscription_id": null
+     },
+     "identity_schema_version": 0,
+     "mode": "managed",
+     "name": "data",
+     "provider_name": "registry.terraform.io/hashicorp/azurerm",
+     "schema_version": 4,
+     "sensitive_values": {
+      "azure_files_authentication": [],
+      "blob_properties": [
+       {
+        "container_delete_retention_policy": [],
+        "cors_rule": [],
+        "delete_retention_policy": [
+         {}
+        ],
+        "restore_policy": []
+       }
+      ],
+      "custom_domain": [],
+      "customer_managed_key": [],
+      "identity": [],
+      "immutability_policy": [],
+      "network_rules": [
+       {
+        "bypass": [
+         false
+        ],
+        "ip_rules": [],
+        "private_link_access": [],
+        "virtual_network_subnet_ids": []
+       }
+      ],
+      "primary_access_key": true,
+      "primary_blob_connection_string": true,
+      "primary_connection_string": true,
+      "queue_properties": [],
+      "routing": [],
+      "sas_policy": [],
+      "secondary_access_key": true,
+      "secondary_blob_connection_string": true,
+      "secondary_connection_string": true,
+      "share_properties": [],
+      "static_website": [],
+      "tags": {}
+     },
+     "type": "azurerm_storage_account",
+     "values": {
+      "access_tier": "Hot",
+      "account_kind": "StorageV2",
+      "account_replication_type": "LRS",
+      "account_tier": "Standard",
+      "allow_nested_items_to_be_public": false,
+      "allowed_copy_scope": null,
+      "azure_files_authentication": [],
+      "blob_properties": [
+       {
+        "change_feed_enabled": false,
+        "change_feed_retention_in_days": null,
+        "container_delete_retention_policy": [],
+        "cors_rule": [],
+        "delete_retention_policy": [
+         {
+          "days": 7,
+          "permanent_delete_enabled": false
+         }
+        ],
+        "last_access_time_enabled": false,
+        "restore_policy": [],
+        "versioning_enabled": true
+       }
+      ],
+      "cross_tenant_replication_enabled": false,
+      "custom_domain": [],
+      "customer_managed_key": [],
+      "default_to_oauth_authentication": false,
+      "dns_endpoint_type": "Standard",
+      "edge_zone": null,
+      "https_traffic_only_enabled": true,
+      "identity": [],
+      "immutability_policy": [],
+      "infrastructure_encryption_enabled": false,
+      "is_hns_enabled": false,
+      "local_user_enabled": true,
+      "location": "centralindia",
+      "min_tls_version": "TLS1_2",
+      "name": "secopsdevcindata",
+      "network_rules": [
+       {
+        "bypass": [
+         "AzureServices"
+        ],
+        "default_action": "Deny",
+        "private_link_access": []
+       }
+      ],
+      "nfsv3_enabled": false,
+      "provisioned_billing_model_version": null,
+      "public_network_access_enabled": false,
+      "queue_encryption_key_type": "Service",
+      "resource_group_name": "secops-dev-cin-rg",
+      "sas_policy": [],
+      "sftp_enabled": false,
+      "shared_access_key_enabled": false,
+      "table_encryption_key_type": "Service",
+      "tags": {
+       "costcenter": "CC-1042",
+       "environment": "dev",
+       "monitoring": "law",
+       "owner": "platform-team@example.com",
+       "project": "agent-secops"
+      },
+      "timeouts": null
+     }
+    }
+   ]
+  }
+ },
+ "prior_state": {
+  "format_version": "1.0",
+  "terraform_version": "1.15.8",
+  "values": {
+   "outputs": {
+    "monthly_cost_note": {
+     "sensitive": false,
+     "type": "string",
+     "value": "Demo footprint only: storage (few MB) + free-tier Log Analytics. Run scripts/azure-destroy.sh to return to zero."
+    },
+    "resource_group_name": {
+     "sensitive": false,
+     "type": "string",
+     "value": "secops-dev-cin-rg"
+    },
+    "storage_account_name": {
+     "sensitive": false,
+     "type": "string",
+     "value": "secopsdevcindata"
+    }
+   },
+   "root_module": {}
+  }
+ },
+ "relevant_attributes": [
+  {
+   "attribute": [
+    "id"
+   ],
+   "resource": "azurerm_log_analytics_workspace.law"
+  },
+  {
+   "attribute": [
+    "location"
+   ],
+   "resource": "azurerm_resource_group.rg"
+  },
+  {
+   "attribute": [
+    "name"
+   ],
+   "resource": "azurerm_storage_account.data"
+  },
+  {
+   "attribute": [
+    "name"
+   ],
+   "resource": "azurerm_resource_group.rg"
+  },
+  {
+   "attribute": [
+    "id"
+   ],
+   "resource": "azurerm_storage_account.data"
+  }
+ ],
+ "resource_changes": [
+  {
+   "address": "azurerm_log_analytics_workspace.law",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "allow_resource_only_permissions": true,
+     "cmk_for_query_forced": null,
+     "daily_quota_gb": 0.1,
+     "data_collection_rule_id": null,
+     "identity": [],
+     "immediate_data_purge_on_30_days_enabled": null,
+     "internet_ingestion_enabled": true,
+     "internet_query_enabled": true,
+     "local_authentication_enabled": true,
+     "location": "centralindia",
+     "name": "secops-dev-cin-law",
+     "reservation_capacity_in_gb_per_day": null,
+     "resource_group_name": "secops-dev-cin-rg",
+     "retention_in_days": 30,
+     "sku": "PerGB2018",
+     "tags": {
+      "costcenter": "CC-1042",
+      "environment": "dev",
+      "monitoring": "law",
+      "owner": "platform-team@example.com",
+      "project": "agent-secops"
+     },
+     "timeouts": null
+    },
+    "after_sensitive": {
+     "identity": [],
+     "primary_shared_key": true,
+     "secondary_shared_key": true,
+     "tags": {}
+    },
+    "after_unknown": {
+     "id": true,
+     "identity": [],
+     "local_authentication_disabled": true,
+     "primary_shared_key": true,
+     "secondary_shared_key": true,
+     "tags": {},
+     "workspace_id": true
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "law",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "type": "azurerm_log_analytics_workspace"
+  },
+  {
+   "address": "azurerm_monitor_diagnostic_setting.storage",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "enabled_log": [],
+     "enabled_metric": [
+      {
+       "category": "Transaction"
+      }
+     ],
+     "eventhub_authorization_rule_id": null,
+     "eventhub_name": null,
+     "name": "secops-dev-cin-storage-diag",
+     "partner_solution_id": null,
+     "storage_account_id": null,
+     "timeouts": null
+    },
+    "after_sensitive": {
+     "enabled_log": [],
+     "enabled_metric": [
+      {}
+     ],
+     "metric": []
+    },
+    "after_unknown": {
+     "enabled_log": [],
+     "enabled_metric": [
+      {}
+     ],
+     "id": true,
+     "log_analytics_destination_type": true,
+     "log_analytics_workspace_id": true,
+     "metric": true,
+     "target_resource_id": true
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "storage",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "type": "azurerm_monitor_diagnostic_setting"
+  },
+  {
+   "address": "azurerm_resource_group.rg",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "location": "centralindia",
+     "managed_by": null,
+     "name": "secops-dev-cin-rg",
+     "tags": {
+      "costcenter": "CC-1042",
+      "environment": "dev",
+      "monitoring": "law",
+      "owner": "platform-team@example.com",
+      "project": "agent-secops"
+     },
+     "timeouts": null
+    },
+    "after_sensitive": {
+     "tags": {}
+    },
+    "after_unknown": {
+     "id": true,
+     "tags": {}
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "rg",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "type": "azurerm_resource_group"
+  },
+  {
+   "address": "azurerm_storage_account.data",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "access_tier": "Hot",
+     "account_kind": "StorageV2",
+     "account_replication_type": "LRS",
+     "account_tier": "Standard",
+     "allow_nested_items_to_be_public": false,
+     "allowed_copy_scope": null,
+     "azure_files_authentication": [],
+     "blob_properties": [
+      {
+       "change_feed_enabled": false,
+       "change_feed_retention_in_days": null,
+       "container_delete_retention_policy": [],
+       "cors_rule": [],
+       "delete_retention_policy": [
+        {
+         "days": 7,
+         "permanent_delete_enabled": false
+        }
+       ],
+       "last_access_time_enabled": false,
+       "restore_policy": [],
+       "versioning_enabled": true
+      }
+     ],
+     "cross_tenant_replication_enabled": false,
+     "custom_domain": [],
+     "customer_managed_key": [],
+     "default_to_oauth_authentication": false,
+     "dns_endpoint_type": "Standard",
+     "edge_zone": null,
+     "https_traffic_only_enabled": true,
+     "identity": [],
+     "immutability_policy": [],
+     "infrastructure_encryption_enabled": false,
+     "is_hns_enabled": false,
+     "local_user_enabled": true,
+     "location": "centralindia",
+     "min_tls_version": "TLS1_2",
+     "name": "secopsdevcindata",
+     "network_rules": [
+      {
+       "bypass": [
+        "AzureServices"
+       ],
+       "default_action": "Deny",
+       "private_link_access": []
+      }
+     ],
+     "nfsv3_enabled": false,
+     "provisioned_billing_model_version": null,
+     "public_network_access_enabled": false,
+     "queue_encryption_key_type": "Service",
+     "resource_group_name": "secops-dev-cin-rg",
+     "sas_policy": [],
+     "sftp_enabled": false,
+     "shared_access_key_enabled": false,
+     "table_encryption_key_type": "Service",
+     "tags": {
+      "costcenter": "CC-1042",
+      "environment": "dev",
+      "monitoring": "law",
+      "owner": "platform-team@example.com",
+      "project": "agent-secops"
+     },
+     "timeouts": null
+    },
+    "after_identity": {
+     "name": null,
+     "resource_group_name": null,
+     "subscription_id": null
+    },
+    "after_sensitive": {
+     "azure_files_authentication": [],
+     "blob_properties": [
+      {
+       "container_delete_retention_policy": [],
+       "cors_rule": [],
+       "delete_retention_policy": [
+        {}
+       ],
+       "restore_policy": []
+      }
+     ],
+     "custom_domain": [],
+     "customer_managed_key": [],
+     "identity": [],
+     "immutability_policy": [],
+     "network_rules": [
+      {
+       "bypass": [
+        false
+       ],
+       "ip_rules": [],
+       "private_link_access": [],
+       "virtual_network_subnet_ids": []
+      }
+     ],
+     "primary_access_key": true,
+     "primary_blob_connection_string": true,
+     "primary_connection_string": true,
+     "queue_properties": [],
+     "routing": [],
+     "sas_policy": [],
+     "secondary_access_key": true,
+     "secondary_blob_connection_string": true,
+     "secondary_connection_string": true,
+     "share_properties": [],
+     "static_website": [],
+     "tags": {}
+    },
+    "after_unknown": {
+     "azure_files_authentication": [],
+     "blob_properties": [
+      {
+       "container_delete_retention_policy": [],
+       "cors_rule": [],
+       "default_service_version": true,
+       "delete_retention_policy": [
+        {}
+       ],
+       "restore_policy": []
+      }
+     ],
+     "custom_domain": [],
+     "customer_managed_key": [],
+     "id": true,
+     "identity": [],
+     "immutability_policy": [],
+     "large_file_share_enabled": true,
+     "network_rules": [
+      {
+       "bypass": [
+        false
+       ],
+       "ip_rules": true,
+       "private_link_access": [],
+       "virtual_network_subnet_ids": true
+      }
+     ],
+     "primary_access_key": true,
+     "primary_blob_connection_string": true,
+     "primary_blob_endpoint": true,
+     "primary_blob_host": true,
+     "primary_blob_internet_endpoint": true,
+     "primary_blob_internet_host": true,
+     "primary_blob_microsoft_endpoint": true,
+     "primary_blob_microsoft_host": true,
+     "primary_connection_string": true,
+     "primary_dfs_endpoint": true,
+     "primary_dfs_host": true,
+     "primary_dfs_internet_endpoint": true,
+     "primary_dfs_internet_host": true,
+     "primary_dfs_microsoft_endpoint": true,
+     "primary_dfs_microsoft_host": true,
+     "primary_file_endpoint": true,
+     "primary_file_host": true,
+     "primary_file_internet_endpoint": true,
+     "primary_file_internet_host": true,
+     "primary_file_microsoft_endpoint": true,
+     "primary_file_microsoft_host": true,
+     "primary_location": true,
+     "primary_queue_endpoint": true,
+     "primary_queue_host": true,
+     "primary_queue_microsoft_endpoint": true,
+     "primary_queue_microsoft_host": true,
+     "primary_table_endpoint": true,
+     "primary_table_host": true,
+     "primary_table_microsoft_endpoint": true,
+     "primary_table_microsoft_host": true,
+     "primary_web_endpoint": true,
+     "primary_web_host": true,
+     "primary_web_internet_endpoint": true,
+     "primary_web_internet_host": true,
+     "primary_web_microsoft_endpoint": true,
+     "primary_web_microsoft_host": true,
+     "queue_properties": true,
+     "routing": true,
+     "sas_policy": [],
+     "secondary_access_key": true,
+     "secondary_blob_connection_string": true,
+     "secondary_blob_endpoint": true,
+     "secondary_blob_host": true,
+     "secondary_blob_internet_endpoint": true,
+     "secondary_blob_internet_host": true,
+     "secondary_blob_microsoft_endpoint": true,
+     "secondary_blob_microsoft_host": true,
+     "secondary_connection_string": true,
+     "secondary_dfs_endpoint": true,
+     "secondary_dfs_host": true,
+     "secondary_dfs_internet_endpoint": true,
+     "secondary_dfs_internet_host": true,
+     "secondary_dfs_microsoft_endpoint": true,
+     "secondary_dfs_microsoft_host": true,
+     "secondary_file_endpoint": true,
+     "secondary_file_host": true,
+     "secondary_file_internet_endpoint": true,
+     "secondary_file_internet_host": true,
+     "secondary_file_microsoft_endpoint": true,
+     "secondary_file_microsoft_host": true,
+     "secondary_location": true,
+     "secondary_queue_endpoint": true,
+     "secondary_queue_host": true,
+     "secondary_queue_microsoft_endpoint": true,
+     "secondary_queue_microsoft_host": true,
+     "secondary_table_endpoint": true,
+     "secondary_table_host": true,
+     "secondary_table_microsoft_endpoint": true,
+     "secondary_table_microsoft_host": true,
+     "secondary_web_endpoint": true,
+     "secondary_web_host": true,
+     "secondary_web_internet_endpoint": true,
+     "secondary_web_internet_host": true,
+     "secondary_web_microsoft_endpoint": true,
+     "secondary_web_microsoft_host": true,
+     "share_properties": true,
+     "static_website": true,
+     "tags": {}
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "data",
+   "provider_name": "registry.terraform.io/hashicorp/azurerm",
+   "type": "azurerm_storage_account"
+  }
+ ],
+ "terraform_version": "1.15.8",
+ "variables": {
+  "allowed_ip_rules": {
+   "value": []
+  },
+  "cost_center": {
+   "value": "CC-1042"
+  },
+  "environment": {
+   "value": "dev"
+  },
+  "location": {
+   "value": "centralindia"
+  },
+  "log_daily_quota_gb": {
+   "value": 0.1
+  },
+  "owner": {
+   "value": "platform-team@example.com"
+  },
+  "public_network_access": {
+   "value": false
+  },
+  "region_short": {
+   "value": "cin"
+  },
+  "replication_type": {
+   "value": "LRS"
+  },
+  "use_oidc": {
+   "value": false
+  },
+  "workload": {
+   "value": "secops"
+  }
+ }
+}

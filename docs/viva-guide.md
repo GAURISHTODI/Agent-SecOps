@@ -29,8 +29,9 @@ A GitHub Actions job runs `terraform plan`, exports it with
    whole multi-cloud story.
 2. **Layer 1:** 22 deterministic rules, each tagged with a framework pillar,
    severity and a written rationale. Confidence 1.0.
-3. **Layer 2:** a reasoning layer for intent that no rule encodes (section 2).
-4. **Layer 3:** organisational policy: severity thresholds, per-rule overrides,
+3. **Layer 2a, organisational customized policies:** checks for intent that no rule
+   encodes (section 2); **Layer 2b** adds dependency-graph risk.
+4. **Layer 3, thresholds & waivers:** severity thresholds, per-rule overrides,
    and time-boxed waivers that expire.
 5. Returns **pass / remediate / block** as the process exit code (0 / 1 / 2),
    plus Markdown, JSON and SARIF reports.
@@ -100,7 +101,7 @@ Be precise; do not claim "we trained an AI". The defensible contributions are:
    cannot invent resources, cannot duplicate Layer 1, cannot block by default,
    cannot break the pipeline. This is the engineering contribution.
 4. **A measurable ablation.** Rules-only vs rules+reasoning on the same plans
-   isolates what reasoning adds (37/42 -> 42/42, 5 recovered, 0 false positives).
+   isolates what reasoning adds (33/42 -> 42/42, 9 recovered, 0 false positives).
 5. **Governance as code.** Expiring waivers so exceptions cannot become permanent.
 
 ### 2.5 "Where is the ML / training?"
@@ -116,7 +117,7 @@ ablation. Stronger evidence if they push: the weaknesses below.
 
 - The benchmark ground truth was written by the same authors as the rules and
   probes, so 100% is a regression suite, not independent accuracy.
-- The 5 "recovered by reasoning" come from the offline heuristics. The LLM path
+- The 9 "recovered by reasoning" come from the offline heuristics. The LLM path
   is implemented and guard-railed but has **not** been benchmarked.
 - Future work that answers this: run both reasoners on an independent set
   (public vulnerable-Terraform repos such as TerraGoat), report precision and
@@ -202,7 +203,7 @@ was applied; steady cost is a few rupees a month; `terraform destroy` returns it
 to zero."
 
 ### Case 9: the evidence (Gaurish)
-Dashboard **Benchmark** tab: 42 seeded violations, rules alone 37, with
+Dashboard **Benchmark** tab: 42 seeded violations, rules alone 33, with
 reasoning 42, 0 false positives. Then volunteer section 2.6 before they ask.
 
 ---

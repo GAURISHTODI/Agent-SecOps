@@ -39,6 +39,15 @@ resource "aws_s3_bucket_acl" "data" {
   acl    = "public-read"
 }
 
+# VIOLATION: reasoner -- versioning disabled. In AWS provider v4+ these
+# settings live on their own resources; the gate folds them onto the bucket.
+resource "aws_s3_bucket_versioning" "data" {
+  bucket = aws_s3_bucket.data.id
+  versioning_configuration {
+    status = "Disabled"
+  }
+}
+
 # VIOLATION: WAF-SEC-004 SSH and Postgres open to the internet
 resource "aws_security_group" "web" {
   name        = "web-sg"

@@ -134,3 +134,14 @@ resource "azurerm_monitor_diagnostic_setting" "storage" {
     category = "Transaction"
   }
 }
+
+# --- Identity for the workload's release automation ----------------------
+# A user-assigned managed identity: the workload authenticates with it
+# instead of a stored secret (CAF Identity). It is free, so adding it is the
+# demonstration change that goes through the gate and is deployed by CI.
+resource "azurerm_user_assigned_identity" "release" {
+  name                = "${local.prefix}-release-id"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  tags                = local.common_tags
+}

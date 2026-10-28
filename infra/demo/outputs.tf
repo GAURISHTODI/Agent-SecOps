@@ -17,3 +17,8 @@ output "monthly_cost_note" {
   description = "Reminder of the intended spend envelope for this module."
   value       = "Demo footprint only: storage (few MB) + free-tier Log Analytics. Run scripts/azure-destroy.sh to return to zero."
 }
+
+output "release_identity_name" {
+  description = "Managed identity added through the gated pipeline."
+  value       = azurerm_user_assigned_identity.release.name
+}

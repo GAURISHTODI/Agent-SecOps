@@ -176,7 +176,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:
+        # argparse exits 2 on a usage error, which is also EXIT_BLOCK. A
+        # mistyped flag in the workflow must read as an error, not a verdict.
+        return EXIT_ERROR if exc.code == 2 else int(exc.code or 0)
     return args.func(args)
 
 

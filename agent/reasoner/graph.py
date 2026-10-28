@@ -76,6 +76,22 @@ _ENV_FACTOR = {"prod": 1.15, "production": 1.15, "dev": 0.80, "test": 0.80,
 
 _HUB_KINDS = (Kind.RESOURCE_GROUP,)
 
+# Resources that only connect two others: a security-group rule joining two
+# groups, an association attaching a network security group to a subnet.
+# Counted as nodes they would add a hop to every path through them, so when
+# one carries no exposure or weakness of its own it becomes a direct link
+# between its neighbours (and the explanation still names it).
+_CONNECTOR_TYPES = (
+    "aws_security_group_rule",
+    "aws_vpc_security_group_ingress_rule",
+    "aws_vpc_security_group_egress_rule",
+    "azurerm_network_security_rule",
+)
+
+
+def _is_connector(resource: Resource) -> bool:
+    return resource.type in _CONNECTOR_TYPES or resource.type.endswith("_association")
+
 # Only findings that make a resource easier to compromise or harder to
 # recover count as weakness. Missing tags, naming and region choices are
 # governance concerns, not exploitability.
@@ -142,6 +158,36 @@ class GraphReasoner:
         self.edges_used = used
         return adj
 
+    def _contract(
+        self,
+        adj: Dict[str, List[str]],
+        resources: Sequence[Resource],
+        exposure: Dict[str, float],
+        evidence: Dict[str, List[Finding]],
+    ) -> Dict[Tuple[str, str], str]:
+        """Replace finding-free connector nodes by direct links.
+
+        Returns, for every link created this way, the connector it stands for,
+        so a path through it can still be explained.
+        """
+        via: Dict[Tuple[str, str], str] = {}
+        for r in resources:
+            a = r.address
+            if not _is_connector(r) or exposure.get(a) or evidence.get(a):
+                continue
+            ends = adj.pop(a, [])
+            for n in ends:
+                adj[n] = [x for x in adj[n] if x != a]
+            for i, x in enumerate(ends):
+                for y in ends[i + 1:]:
+                    if y not in adj[x]:
+                        adj[x].append(y)
+                        adj[y].append(x)
+                    via.setdefault((x, y), a)
+                    via.setdefault((y, x), a)
+        self.edges_used = len({tuple(sorted((a, b))) for a, ns in adj.items() for b in ns})
+        return via
+
     def _bfs(self, adj: Dict[str, List[str]], start: str) -> Dict[str, Tuple[int, List[str]]]:
         """address -> (distance, path) for every node within max_hops of start."""
         seen: Dict[str, Tuple[int, List[str]]] = {start: (0, [start])}
@@ -193,14 +239,15 @@ class GraphReasoner:
         self, resources: Sequence[Resource], findings: Sequence[Finding]
     ) -> List[Finding]:
         adj = self._adjacency(resources)
-        self.nodes_seen = len(adj)
         exposure, evidence, why = self._signals(resources, findings)
+        via = self._contract(adj, resources, exposure, evidence)
+        self.nodes_seen = len(adj)
         out: List[Finding] = []
         model_nodes: List[Dict[str, object]] = []
         flagged_paths: List[Dict[str, object]] = []
 
         for target in resources:
-            if target.kind in _HUB_KINDS:
+            if target.kind in _HUB_KINDS or target.address not in adj:
                 continue
             tid = target.address
             weakness_items = evidence[tid]
@@ -250,7 +297,11 @@ class GraphReasoner:
                 continue
             strength, src, dist, path = others[0]
             weak_titles = "; ".join(weak_titles_all[:3])
-            chain = " -> ".join(reversed(path))
+            hops = list(reversed(path))
+            chain = hops[0] + "".join(
+                (" -[via {}]-> ".format(via[(a, b)]) if (a, b) in via else " -> ") + b
+                for a, b in zip(hops, hops[1:])
+            )
             severity = "high" if risk >= 0.60 else "medium" if risk >= 0.45 else "low"
             exposure_text = "; ".join(why[src][:2]) or "exposure"
             explanation = (

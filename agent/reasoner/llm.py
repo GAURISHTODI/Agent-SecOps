@@ -47,7 +47,8 @@ Rules of engagement:
   report it as a violation.
 - Prefer few, high-quality findings. Zero findings is a valid answer.
 
-Reply with ONLY a JSON array. Each element:
+Reply with ONLY a JSON object of the form {"findings": [...]}, where each
+element of the array is:
 {"resource": "<address>", "title": "<short title>",
  "pillar": "<one of the pillar names given to you>",
  "severity": "critical|high|medium|low",
@@ -112,6 +113,14 @@ class LLMReasoner(Reasoner):
             self.key = os.environ.get("ANTHROPIC_API_KEY", "")
             if not self.key:
                 raise LLMUnavailable("ANTHROPIC_API_KEY must be set.")
+            if not model.startswith("claude-"):
+                # policy.yaml ships an Azure OpenAI model name; sending it to
+                # the Anthropic API would only fail later with a 404.
+                raise LLMUnavailable(
+                    'reasoner.model is "{}", which is not a Claude model id; set '
+                    "a claude-* model in policies/policy.yaml to use the "
+                    "anthropic reasoner.".format(model)
+                )
         else:
             raise LLMUnavailable("Unknown LLM provider: {}".format(provider))
 

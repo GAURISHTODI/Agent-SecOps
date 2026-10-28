@@ -3,17 +3,21 @@
     {
       "plan": "azure_noncompliant.plan.json",
       "seeded": 28,
-      "detected_rules_only": 25,
+      "detected_rules_only": 21,
       "detected_with_reasoning": 28,
       "recovered_by_reasoning": [
+        "network default allow",
+        "shared keys enabled",
+        "versioning disabled",
         "firewall spans all IPv4",
+        "password auth enabled",
         "no availability zone",
         "access policies not RBAC"
       ],
       "still_missed": [],
       "verdict": "block",
       "verdict_correct": true,
-      "duration_ms": 10
+      "duration_ms": 9
     },
     {
       "plan": "aws_noncompliant.plan.json",
@@ -39,13 +43,14 @@
       "still_missed": [],
       "verdict": "block",
       "verdict_correct": true,
-      "duration_ms": 9
+      "duration_ms": 8
     }
   ],
   "clean": [
     {
       "plan": "azure_compliant.plan.json",
       "false_positives": 0,
+      "advisories": 0,
       "details": [],
       "verdict": "pass",
       "verdict_correct": true
@@ -53,12 +58,84 @@
   ],
   "totals": {
     "seeded_violations": 42,
-    "detected_rules_only": 37,
+    "detected_rules_only": 33,
     "detected_with_reasoning": 42,
-    "recall_rules_only": 0.881,
+    "recall_rules_only": 0.786,
     "recall_with_reasoning": 1.0,
-    "reasoning_uplift": 5,
+    "reasoning_uplift": 9,
     "false_positives_on_clean_plan": 0,
-    "wall_clock_s": 0.07
+    "advisories_on_clean_plan": 0,
+    "wall_clock_s": 0.16
+  },
+  "real": {
+    "suites": [
+      {
+        "plan": "azure_noncompliant.plan.json",
+        "seeded": 28,
+        "detected_rules_only": 21,
+        "detected_with_reasoning": 28,
+        "recovered_by_reasoning": [
+          "network default allow",
+          "shared keys enabled",
+          "versioning disabled",
+          "firewall spans all IPv4",
+          "password auth enabled",
+          "no availability zone",
+          "access policies not RBAC"
+        ],
+        "still_missed": [],
+        "verdict": "block",
+        "verdict_correct": true,
+        "duration_ms": 9
+      },
+      {
+        "plan": "aws_noncompliant.plan.json",
+        "seeded": 8,
+        "detected_rules_only": 7,
+        "detected_with_reasoning": 8,
+        "recovered_by_reasoning": [
+          "versioning disabled"
+        ],
+        "still_missed": [],
+        "verdict": "block",
+        "verdict_correct": true,
+        "duration_ms": 11
+      },
+      {
+        "plan": "gcp_noncompliant.plan.json",
+        "seeded": 6,
+        "detected_rules_only": 5,
+        "detected_with_reasoning": 6,
+        "recovered_by_reasoning": [
+          "versioning disabled"
+        ],
+        "still_missed": [],
+        "verdict": "block",
+        "verdict_correct": true,
+        "duration_ms": 8
+      }
+    ],
+    "clean": [
+      {
+        "plan": "azure_compliant.plan.json",
+        "false_positives": 0,
+        "advisories": 1,
+        "details": [
+          "WAF-SEC-005 on azurerm_storage_account.data (low)"
+        ],
+        "verdict": "pass",
+        "verdict_correct": true
+      }
+    ],
+    "totals": {
+      "seeded_violations": 42,
+      "detected_rules_only": 33,
+      "detected_with_reasoning": 42,
+      "recall_rules_only": 0.786,
+      "recall_with_reasoning": 1.0,
+      "reasoning_uplift": 9,
+      "false_positives_on_clean_plan": 0,
+      "advisories_on_clean_plan": 1
+    }
   }
 }

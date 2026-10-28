@@ -17,9 +17,11 @@ Developer → GitHub Actions → terraform plan → plan.json
                                     ┌─────────────▼─────────────┐
                                     │   AGENT SECOPS GATE       │
                                     │  Layer 1: CAF/WAF rules   │
-                                    │  Layer 2: framework       │
-                                    │           reasoning       │
-                                    │  Layer 3: org policy      │
+                                    │  Layer 2a: organisational │
+                                    │   customized policies     │
+                                    │  Layer 2b: graph risk     │
+                                    │  Layer 3: thresholds &    │
+                                    │           waivers         │
                                     └─────────────┬─────────────┘
                                      BLOCK ◄──────┴──────► PASS
                                        │                     │
@@ -31,16 +33,23 @@ Developer → GitHub Actions → terraform plan → plan.json
 
 Static policy-as-code tools (Checkov, tfsec, OPA, Sentinel) only catch violations of rules **someone already wrote**. CAF and WAF are narrative documentation — thousands of words of architectural judgement that were never turned into rules. Agent SecOps adds a reasoning layer over that documentation.
 
-Measured on the seeded test set (`docs/benchmark-results.md`):
+Measured on the seeded test set (`docs/benchmark-results.md`). The numbers are
+identical on the hand-written fixtures and on real `terraform show -json`
+output from the seeded modules (`examples/plans/real/`), and a violation only
+counts as detected when the specific rule or probe labelled for it fires:
 
 | Metric | Value |
 |---|---|
 | Seeded violations across Azure, AWS, GCP | 42 |
-| Detected by deterministic rules alone (≈ what a static scanner gives you) | 37 (88.1%) |
+| Detected by deterministic rules alone | 33 (78.6%) |
 | Detected with the reasoning layer | 42 (100%) |
-| **Recovered by reasoning alone** | **5** |
-| False positives on the compliant module | **0** |
-| Gate latency | < 10 ms |
+| **Recovered by reasoning alone** | **9** |
+| Verdict-affecting false positives on the compliant module | **0** |
+| Gate latency | < 15 ms |
+
+The offline reasoning layer is a set of hand-written probes derived from the
+framework knowledge base, and the seeded modules were written by the same team,
+so treat recall as an upper bound rather than a field measurement.
 
 ## Quick start — 60 seconds, no cloud account needed
 
@@ -80,7 +89,7 @@ Other commands:
 ```bash
 python -m agent.cli rules                  # the 22-rule catalogue
 python -m agent.cli explain WAF-SEC-004    # why a rule exists, in framework terms
-python -m pytest tests/ -q                 # 63 tests
+python -m pytest tests/ -q                 # 146 tests
 python scripts/benchmark.py                # detection + false-positive numbers
 ```
 
@@ -128,12 +137,16 @@ dashboard/                 local demo UI (not part of the gate)
 
 policies/policy.yaml       the only file a platform team needs to edit
 infra/demo/                minimal compliant Azure module (< ₹50/month)
-examples/terraform/        seeded misconfiguration module (plan-only, ₹0)
-examples/plans/            four plan fixtures: Azure ×2, AWS, GCP
+examples/terraform/        seeded modules (plan-only, ₹0): Azure, AWS, GCP, plus four
+                           dependency-graph showcases: aws_mesh, aws_thousand_cuts,
+                           aws_shared_trust (harmless alone, high risk together) and
+                           aws_risk_spectrum (every risk level in one graph)
+examples/plans/            hand-written plan fixtures: Azure ×2, AWS, GCP
+  real/                    real `terraform show -json` output of the same modules
 .github/workflows/         the pipeline the gate lives in
 scripts/                   Azure bootstrap, cost watchdog, teardown, benchmark
 docs/                      architecture, Azure setup, cost control, team split
-tests/                     63 tests
+tests/                     146 tests
 ```
 
 ## Connecting Azure

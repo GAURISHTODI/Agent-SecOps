@@ -46,7 +46,12 @@ class _Probe:
 
 
 def _has(resource: Resource, key: str) -> bool:
-    return key in resource.after
+    """True when the attribute is actually set.
+
+    Real plans list every schema attribute, unset ones as null or as an empty
+    block list, so the key being present is not enough.
+    """
+    return resource.after.get(key) not in (None, [], {}, "")
 
 
 def _off(resource: Resource, key: str) -> bool:
@@ -85,7 +90,8 @@ _PROBES: List[_Probe] = [
         severity="medium",
         confidence=0.65,
         test=lambda r: _off(r, "versioning_enabled")
-        or (r.get("blob_properties") and _off_nested(r, "versioning_enabled")),
+        or _off_nested(r, "blob_properties", "versioning_enabled")   # Azure
+        or _off_nested(r, "versioning", "enabled"),                  # GCP
         explanation=(
             "Blob versioning is disabled, so an overwrite or a ransomware-style "
             "bulk write is unrecoverable. WAF Reliability treats object data as "
@@ -211,8 +217,11 @@ _PROBES: List[_Probe] = [
         pillar="CAF:Identity",
         severity="medium",
         confidence=0.65,
+        # azurerm 4.x renamed enable_rbac_authorization; accept either name.
         test=lambda r: _off(r, "enable_rbac_authorization")
-        or (_has(r, "access_policy") and not _has(r, "enable_rbac_authorization")),
+        or _off(r, "rbac_authorization_enabled")
+        or (_has(r, "access_policy") and not _on(r, "enable_rbac_authorization")
+            and not _on(r, "rbac_authorization_enabled")),
         explanation=(
             "The vault relies on access policies rather than Azure RBAC. CAF "
             "identity guidance prefers RBAC because access policies are not "
@@ -253,11 +262,12 @@ _PROBES: List[_Probe] = [
 ]
 
 
-def _off_nested(resource: Resource, key: str) -> bool:
-    block = resource.get("blob_properties")
-    if not isinstance(block, dict):
+def _off_nested(resource: Resource, block_name: str, key: str) -> bool:
+    """True when `block_name.key` is present and explicitly not true."""
+    block = resource.get(block_name)
+    if not isinstance(block, dict) or block.get(key) is None:
         return False
-    return key in block and not (block.get(key) is True)
+    return block.get(key) is not True
 
 
 def _retention_below(resource: Resource, days: int) -> bool:

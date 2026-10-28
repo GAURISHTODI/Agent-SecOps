@@ -6,10 +6,24 @@ Performance Efficiency.
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..models import Kind, Pillar, Resource, Severity
 from .base import Rule, is_open_cidr, register, truthy
+
+
+def _sku(resource: Resource) -> str:
+    """The size/tier field, whichever name this cloud gives it."""
+    return str(
+        resource.after.get("size")
+        or resource.after.get("sku_name")
+        or resource.after.get("instance_type")
+        or resource.after.get("instance_class")   # AWS RDS
+        or resource.after.get("machine_type")
+        or resource.after.get("tier")
+        or resource.get("settings.tier")          # GCP Cloud SQL
+        or ""
+    )
 
 
 def _tls_value(resource: Resource) -> Optional[str]:
@@ -65,7 +79,9 @@ class MinimumTlsVersion(Rule):
         raw = _tls_value(resource)
         if raw is None:
             return None
-        digits = raw.upper().replace("TLS", "").replace("_", ".").replace("V", "").strip()
+        digits = (
+            raw.upper().replace("TLS", "").replace("_", ".").replace("V", "").strip(" .")
+        )
         try:
             version = float(digits)
         except ValueError:
@@ -126,88 +142,111 @@ class OpenIngress(Rule):
     terraform_fix = 'source_address_prefix = "10.0.0.0/16"  # not "*"'
     params = {"sensitive_ports": [22, 3389, 3306, 5432, 1433, 27017, 6379]}
 
-    def _cidrs(self, resource: Resource) -> List[str]:
-        found: List[str] = []
-        for key in ("source_address_prefix", "source_address_prefixes"):
-            val = resource.after.get(key)
-            if isinstance(val, str):
-                found.append(val)
-            elif isinstance(val, list):
-                found.extend(str(v) for v in val)
-        for block_name in ("ingress", "allow"):
-            blocks = resource.after.get(block_name)
-            if isinstance(blocks, list):
-                for b in blocks:
-                    if isinstance(b, dict):
-                        found.extend(str(c) for c in (b.get("cidr_blocks") or []))
-        for key in ("source_ranges",):
-            val = resource.after.get(key)
-            if isinstance(val, list):
-                found.extend(str(v) for v in val)
-        return found
+    @staticmethod
+    def _port_range(value: object) -> Optional[Tuple[int, int]]:
+        """'22' -> (22, 22); '20-25' -> (20, 25); '*' -> every port."""
+        text = str(value).strip()
+        if text == "*":
+            return (0, 65535)
+        if text.isdigit():
+            return int(text), int(text)
+        head, _, tail = text.partition("-")
+        if head.isdigit() and tail.isdigit():
+            return int(head), int(tail)
+        return None
 
-    def _ports(self, resource: Resource) -> List[int]:
-        ports: List[int] = []
+    def _rules(self, resource: Resource) -> List[Dict[str, list]]:
+        """Every inbound allow rule on the resource, as {cidrs, ranges}.
 
-        def add(value: object) -> None:
-            text = str(value)
-            if text.isdigit():
-                ports.append(int(text))
-            elif "-" in text:
-                head = text.split("-")[0]
-                if head.isdigit():
-                    ports.append(int(head))
+        One resource can hold several rules: an Azure NSG with inline
+        security_rule blocks, an AWS security group with ingress blocks, a GCP
+        firewall with allow blocks. A standalone rule resource is one rule.
+        """
+        a = resource.after
+        out: List[Dict[str, list]] = []
 
-        for key in ("destination_port_range", "to_port", "from_port"):
-            if key in resource.after:
-                add(resource.after[key])
-        for key in ("destination_port_ranges",):
-            val = resource.after.get(key)
-            if isinstance(val, list):
-                for v in val:
-                    add(v)
-        for block_name in ("ingress", "allow"):
-            blocks = resource.after.get(block_name)
-            if isinstance(blocks, list):
-                for b in blocks:
-                    if not isinstance(b, dict):
-                        continue
-                    add(b.get("from_port"))
-                    for p in b.get("ports") or []:
-                        add(p)
-        return ports
+        def azure(rule: Dict[str, object]) -> None:
+            if str(rule.get("direction", "Inbound")).lower() != "inbound":
+                return
+            if str(rule.get("access", "Allow")).lower() == "deny":
+                return
+            cidrs = [rule.get("source_address_prefix")]
+            cidrs += list(rule.get("source_address_prefixes") or [])
+            ports = [rule.get("destination_port_range")]
+            ports += list(rule.get("destination_port_ranges") or [])
+            out.append({"cidrs": cidrs, "ranges": [self._port_range(p) for p in ports]})
+
+        if "source_address_prefix" in a or "source_address_prefixes" in a:
+            azure(a)
+        for rule in a.get("security_rule") or []:
+            if isinstance(rule, dict):
+                azure(rule)
+
+        # AWS: a security group's ingress blocks, or one aws_security_group_rule
+        # (whose `type` says whether it is ingress or egress).
+        blocks = a.get("ingress")
+        if a.get("type") in ("ingress", "egress"):
+            blocks = [a] if a.get("type") == "ingress" else []
+        for b in blocks if isinstance(blocks, list) else []:
+            if not isinstance(b, dict):
+                continue
+            cidrs = list(b.get("cidr_blocks") or []) + list(b.get("ipv6_cidr_blocks") or [])
+            if str(b.get("protocol")) == "-1":
+                rng = (0, 65535)   # protocol -1 means all traffic, all ports
+            else:
+                low = b.get("from_port")
+                rng = self._port_range("{}-{}".format(low, b.get("to_port", low)))
+            out.append({"cidrs": cidrs, "ranges": [rng]})
+
+        # GCP: a firewall's allow blocks; an allow block with no ports
+        # admits every port.
+        if str(a.get("direction", "INGRESS")).upper() == "INGRESS":
+            sources = list(a.get("source_ranges") or [])
+            for b in a.get("allow") or []:
+                if isinstance(b, dict):
+                    ports = b.get("ports") or ["*"]
+                    out.append({
+                        "cidrs": sources,
+                        "ranges": [self._port_range(p) for p in ports],
+                    })
+        return out
 
     def check(self, resource: Resource) -> Optional[str]:
-        direction = str(resource.after.get("direction", "Inbound")).lower()
-        if direction not in ("inbound", "ingress"):
-            return None
-        access = str(resource.after.get("access", "Allow")).lower()
-        if access == "deny":
-            return None
+        sensitive = sorted({int(p) for p in self.param("sensitive_ports", [])})
+        open_cidrs: List[str] = []
+        hit: List[int] = []
+        every_port = False
+        for rule in self._rules(resource):
+            cidrs = [str(c) for c in rule["cidrs"] if c is not None and is_open_cidr(c)]
+            if not cidrs:
+                continue
+            ranges = [r for r in rule["ranges"] if r is not None]
+            matched = [p for p in sensitive if any(lo <= p <= hi for lo, hi in ranges)]
+            wide = any(lo == 0 and hi >= 65535 for lo, hi in ranges)
+            if matched or wide:
+                open_cidrs.extend(cidrs)
+                hit.extend(matched)
+                every_port = every_port or wide
 
-        open_cidrs = [c for c in self._cidrs(resource) if is_open_cidr(c)]
         if not open_cidrs:
             return None
+        sources = ", ".join(sorted(set(open_cidrs)))
+        if every_port:
+            return "Allows inbound traffic from {} to every port.".format(sources)
+        return "Allows inbound traffic from {} to sensitive port(s) {}.".format(
+            sources, ", ".join(str(p) for p in sorted(set(hit)))
+        )
 
-        sensitive = {int(p) for p in self.param("sensitive_ports", [])}
-        ports = self._ports(resource)
-        hit = sorted(set(ports) & sensitive)
-        port_range = str(resource.after.get("destination_port_range", ""))
-        wide_open = port_range in ("*", "0-65535")
 
-        if hit:
-            return (
-                "Allows inbound traffic from {} to sensitive port(s) {}.".format(
-                    ", ".join(sorted(set(open_cidrs))), ", ".join(str(p) for p in hit)
-                )
-            )
-        if wide_open:
-            return (
-                "Allows inbound traffic from {} to every port.".format(
-                    ", ".join(sorted(set(open_cidrs)))
-                )
-            )
-        return None
+_CMK_FIELDS = {
+    "customer_managed_key",
+    "kms_key_id",
+    "kms_master_key_id",
+    "key_vault_key_id",
+    "encryption",
+    "encryption_key_name",                           # GCP Cloud SQL
+    "transparent_data_encryption_key_vault_key_id",  # Azure SQL
+}
 
 
 @register
@@ -229,20 +268,14 @@ class EncryptionAtRest(Rule):
     )
 
     def check(self, resource: Resource) -> Optional[str]:
-        explicit_off = resource.after.get("infrastructure_encryption_enabled")
-        if explicit_off is not None and not truthy(explicit_off):
-            return "infrastructure_encryption_enabled is false."
-        has_cmk = any(
-            resource.after.get(k)
-            for k in (
-                "customer_managed_key",
-                "kms_key_id",
-                "kms_master_key_id",
-                "key_vault_key_id",
-                "encryption",
-            )
-        )
-        if has_cmk:
+        # infrastructure_encryption_enabled is deliberately not read here: it
+        # adds a second layer of platform encryption, defaults to false on
+        # every Azure storage account, and says nothing about who owns the key.
+        has_cmk = any(resource.after.get(k) for k in _CMK_FIELDS)
+        # A key taken from another resource (kms_key_id = aws_kms_key.x.arn)
+        # is unknown until apply, so the plan omits the value; the reference
+        # itself shows a key is configured.
+        if has_cmk or set(resource.referenced_attrs) & _CMK_FIELDS:
             return None
         return (
             "No customer-managed key is configured; the service falls back to "
@@ -273,6 +306,7 @@ class HardcodedSecret(Rule):
         "fields": [
             "administrator_login_password",
             "admin_password",
+            "root_password",
             "password",
             "secret_value",
             "value",
@@ -285,9 +319,15 @@ class HardcodedSecret(Rule):
         hits: List[str] = []
         for field in self.param("fields", []):
             val = resource.after.get(str(field))
-            if isinstance(val, str) and val and not val.startswith("${"):
-                # A real literal, not an unresolved reference.
-                hits.append(str(field))
+            if not isinstance(val, str) or not val or val.startswith("${"):
+                continue
+            # A value read from a variable, data source or Key Vault is
+            # resolved into the plan as well, so a string alone does not prove
+            # it was hard-coded. Real plans record which attributes came from
+            # a reference, and those are not findings.
+            if str(field) in resource.referenced_attrs:
+                continue
+            hits.append(str(field))
         if not hits:
             return None
         return (
@@ -350,10 +390,21 @@ class BackupRetention(Rule):
 
     def check(self, resource: Resource) -> Optional[str]:
         minimum = int(self.param("minimum_days", 7))
-        for key in ("backup_retention_days", "backup_retention_period"):
-            if key in resource.after:
+        backups = resource.get("settings.backup_configuration")   # GCP Cloud SQL
+        if isinstance(backups, dict) and backups.get("enabled") is False:
+            return "Automated backups are disabled (backup_configuration.enabled = false)."
+        values = {
+            key: resource.after.get(key)
+            for key in ("backup_retention_days", "backup_retention_period")
+        }
+        # Azure SQL keeps point-in-time retention on the database resource.
+        values["short_term_retention_policy.retention_days"] = resource.get(
+            "short_term_retention_policy.retention_days"
+        )
+        for key, raw in values.items():
+            if raw is not None:
                 try:
-                    days = int(resource.after[key])
+                    days = int(raw)
                 except (TypeError, ValueError):
                     continue
                 if days < minimum:
@@ -435,15 +486,7 @@ class OversizedSku(Rule):
         env = str(resource.tags.get("environment", "")).lower()
         if env not in [str(v).lower() for v in self.param("nonprod_values", [])]:
             return None
-        sku = str(
-            resource.after.get("size")
-            or resource.after.get("sku_name")
-            or resource.after.get("instance_type")
-            or resource.after.get("instance_class")   # AWS RDS
-            or resource.after.get("machine_type")
-            or resource.after.get("tier")             # GCP Cloud SQL
-            or ""
-        )
+        sku = _sku(resource)
         if not sku:
             return None
         markers = [str(m) for m in self.param("premium_markers", [])]
@@ -531,7 +574,7 @@ class DiagnosticsEnabled(Rule):
 
 
 @register
-class LockedProviderVersion(Rule):
+class DeletionProtection(Rule):
     id = "WAF-OPS-002"
     title = "Deletion protection disabled on a stateful resource"
     pillar = Pillar.WAF_OPERATIONS
