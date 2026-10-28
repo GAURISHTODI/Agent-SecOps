@@ -50,7 +50,10 @@ rules:
     params:
       # Keep this list tight: it is also a cost control, because it stops
       # anyone accidentally deploying into an expensive or distant region.
-      approved: [centralindia, southindia, eastus]
+      # Region names differ per cloud, so each cloud has its own list.
+      approved: [centralindia, southindia, eastus]        # Azure
+      approved_aws: [ap-south-1, ap-south-2, us-east-1]   # Mumbai, Hyderabad, N. Virginia
+      approved_gcp: [asia-south1, asia-south2, us-east1]  # Mumbai, Delhi, S. Carolina
 
   CAF-COST-001:
     params:

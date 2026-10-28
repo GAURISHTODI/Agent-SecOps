@@ -6,10 +6,11 @@ governed, and is the identity granted to it least-privilege?
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import List, Optional
 
-from ..models import Kind, Pillar, Resource, Severity
+from ..models import Kind, Pillar, Provider, Resource, Severity
 from .base import Rule, missing_tags, register, truthy
 
 # Resource kinds that Terraform models as pure bindings/associations and
@@ -105,9 +106,22 @@ class ApprovedRegion(Rule):
         "silently breaks those commitments."
     )
     remediation = "Move the resource into one of the approved regions."
+    # Each cloud names its regions differently ("eastus" vs "us-east-1" vs
+    # "us-east1"), so an Azure-only list would flag every compliant AWS or GCP
+    # deployment. `approved` is the Azure list (kept for backward
+    # compatibility with existing policy files); the others are per cloud.
     params = {
         "approved": ["centralindia", "southindia", "eastus", "westeurope"],
+        "approved_aws": ["ap-south-1", "ap-south-2", "us-east-1", "eu-west-1"],
+        "approved_gcp": ["asia-south1", "asia-south2", "us-east1", "europe-west4"],
     }
+
+    def _approved_for(self, resource: Resource) -> List[str]:
+        key = {
+            Provider.AWS: "approved_aws",
+            Provider.GCP: "approved_gcp",
+        }.get(resource.provider, "approved")
+        return [str(a).lower().replace(" ", "") for a in self.param(key, [])]
 
     def check(self, resource: Resource) -> Optional[str]:
         location = (
@@ -117,7 +131,7 @@ class ApprovedRegion(Rule):
         )
         if not isinstance(location, str) or not location:
             return None
-        approved = [str(a).lower().replace(" ", "") for a in self.param("approved", [])]
+        approved = self._approved_for(resource)
         norm = location.lower().replace(" ", "")
         if any(norm.startswith(a) for a in approved):
             return None
@@ -217,6 +231,32 @@ class WildcardRoleAssignment(Rule):
     )
     params = {"forbidden_roles": ["Owner", "Contributor", "User Access Administrator"]}
 
+    @staticmethod
+    def _allows_all_actions(raw: object) -> bool:
+        """True if an IAM policy document has an Allow statement with Action "*".
+
+        The document is parsed rather than substring-matched: a statement that
+        allows specific actions on Resource "*" (very common and legitimate,
+        e.g. s3:GetObject) is not a wildcard-action grant.
+        """
+        try:
+            doc = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(doc, dict):
+            return False
+        statements = doc.get("Statement", [])
+        if isinstance(statements, dict):
+            statements = [statements]
+        for stmt in statements if isinstance(statements, list) else []:
+            if not isinstance(stmt, dict) or stmt.get("Effect") != "Allow":
+                continue
+            actions = stmt.get("Action", [])
+            actions = [actions] if isinstance(actions, str) else list(actions or [])
+            if "*" in actions:
+                return True
+        return False
+
     def check(self, resource: Resource) -> Optional[str]:
         problems: List[str] = []
 
@@ -225,16 +265,23 @@ class WildcardRoleAssignment(Rule):
         if isinstance(role, str) and role.lower() in forbidden:
             scope = str(resource.after.get("scope", ""))
             broad = "/resourceGroups/" not in scope
-            problems.append(
-                'Grants the highly-privileged role "{}"{}.'.format(
-                    role,
-                    " at subscription/management-group scope" if broad else "",
+            # Contributor scoped to one resource group is the normal way to
+            # let a pipeline deploy into that group (this project's own CI
+            # identity does exactly that); it is only a finding at
+            # subscription / management-group scope. Owner and User Access
+            # Administrator can grant access to others, so they are flagged
+            # at any scope.
+            if broad or role.lower() != "contributor":
+                problems.append(
+                    'Grants the highly-privileged role "{}"{}.'.format(
+                        role,
+                        " at subscription/management-group scope" if broad else "",
+                    )
                 )
-            )
 
         # AWS / GCP style policy documents
-        blob = str(resource.after.get("policy") or resource.after.get("policy_data") or "")
-        if '"Action": "*"' in blob or '"Action":"*"' in blob or '"*"' in blob and '"Effect": "Allow"' in blob:
+        policy = resource.after.get("policy") or resource.after.get("policy_data")
+        if self._allows_all_actions(policy):
             problems.append("Policy document allows wildcard (*) actions.")
         member = str(resource.after.get("role", ""))
         if member.endswith("/owner") or member == "roles/owner":

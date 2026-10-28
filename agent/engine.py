@@ -18,6 +18,7 @@ from .config import Policy, load_policy
 from .models import Finding, GateResult, PlanSummary, Resource, Verdict
 from .plan_parser import load_plan
 from .reasoner import build_reasoner
+from .reasoner.graph import GraphReasoner
 from .rules.base import Rule, all_rules
 
 
@@ -41,6 +42,17 @@ def _link_diagnostics(plan: PlanSummary) -> None:
         name = resource.name or ""
         if name:
             covered.add(name)
+
+    # Real plans carry the dependency graph: a diagnostic setting that
+    # references a resource covers exactly that resource. This is exact where
+    # the name match above is a heuristic.
+    by_addr = {r.address: r for r in plan.resources}
+    for resource in plan.resources:
+        if "diagnostic" not in resource.type and "log" not in resource.type:
+            continue
+        for target in plan.edges.get(resource.address, []):
+            if target in by_addr and by_addr[target] is not resource:
+                by_addr[target].after["_has_diagnostics"] = True
 
     for resource in plan.resources:
         if resource.name and resource.name in covered:
@@ -69,6 +81,7 @@ def evaluate_plan(
     started = time.time()
     policy = policy or load_policy()
     _link_diagnostics(plan)
+    t_rules = time.perf_counter()
 
     targets: List[Resource] = plan.mutating
 
@@ -81,6 +94,8 @@ def evaluate_plan(
             if finding:
                 findings.append(finding)
 
+    t_reason = time.perf_counter()
+
     # ---- Layer 2: reasoning over framework intent -------------------
     already: Dict[str, List[str]] = {}
     for finding in findings:
@@ -92,12 +107,30 @@ def evaluate_plan(
     except Exception as exc:  # pragma: no cover - the gate must never crash
         note = "reasoning layer error: {}".format(type(exc).__name__)
 
+    # Layer 2b: structural reasoning over the dependency graph. It consumes the
+    # Layer-1 findings as evidence, so it runs on the rule results only.
+    graph_findings: List[Finding] = []
+    graph = None
+    if policy.reasoner.enabled and policy.reasoner.provider not in ("none", "disabled"):
+        graph = GraphReasoner(plan.edges)
+        try:
+            rule_findings = [f for f in findings if f.source == "rules"]
+            graph_findings = graph.analyse_graph(targets, rule_findings)
+            findings.extend(graph_findings)
+        except Exception as exc:  # pragma: no cover - never crash the gate
+            note = "graph reasoning error: {}".format(type(exc).__name__)
+    t_graph = time.perf_counter()
+
+    t_policy = time.perf_counter()
+
     # ---- Layer 3: policy --------------------------------------------
     findings = policy.apply_waivers(findings)
     findings.sort(
         key=lambda f: (-f.severity.rank, f.source != "rules", f.resource_address)
     )
     verdict = policy.decide(findings)
+
+    t_done = time.perf_counter()
 
     by_pillar = Counter(f.pillar.value for f in findings if not f.waived)
     by_severity = Counter(f.severity.value for f in findings if not f.waived)
@@ -111,9 +144,21 @@ def evaluate_plan(
         "by_severity": dict(by_severity),
         "providers": [p.value for p in plan.providers],
         "expired_waivers": [w.rule_id for w in policy.expired_waivers()],
+        # Measured, not estimated: wall time spent in each layer (ms).
+        "stage_ms": {
+            "layer1_rules": round((t_reason - t_rules) * 1000, 2),
+            "layer2_reasoning": round((t_graph - t_reason) * 1000, 2),
+            "layer3_policy": round((t_done - t_policy) * 1000, 2),
+        },
+        "resources_evaluated": len(targets),
     }
     if note:
         stats["reasoner_note"] = note
+    if graph is not None:
+        stats["graph_nodes"] = graph.nodes_seen
+        stats["graph_edges"] = graph.edges_used
+        stats["findings_from_graph"] = len(graph_findings)
+        stats["graph_model"] = graph.model
     if hasattr(reasoner, "stats"):
         stats.update(reasoner.stats())  # type: ignore[attr-defined]
 

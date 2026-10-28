@@ -187,6 +187,10 @@ class PlanSummary:
     terraform_version: str = "unknown"
     format_version: str = "unknown"
     providers: List[Provider] = field(default_factory=list)
+    # Dependency edges taken from the plan's `configuration` section:
+    # address -> addresses of the resources it references. Empty for
+    # hand-written fixtures that carry no configuration block.
+    edges: Dict[str, List[str]] = field(default_factory=dict)
 
     @property
     def mutating(self) -> List[Resource]:
@@ -215,5 +219,6 @@ class GateResult:
             "duration_ms": self.duration_ms,
             "stats": self.stats,
             "resources_evaluated": len(self.plan.mutating),
+            "terraform_version": self.plan.terraform_version,
             "findings": [f.to_dict() for f in self.findings],
         }

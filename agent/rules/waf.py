@@ -84,9 +84,9 @@ class PublicBlobAccess(Rule):
     severity = Severity.CRITICAL
     kinds = (Kind.OBJECT_STORAGE,)
     rationale = (
-        "Anonymous container/bucket access is the single most common cause of "
-        "cloud data leaks; WAF Security requires authenticated access by "
-        "default."
+        "Anonymous container/bucket access is a well-known cause of cloud "
+        "data exposure; WAF Security protects confidentiality, so access "
+        "should be authenticated by default."
     )
     remediation = "Disable anonymous access and grant reads through RBAC or SAS."
     terraform_fix = "allow_nested_items_to_be_public = false"
@@ -369,16 +369,20 @@ class BackupRetention(Rule):
 @register
 class SoftDeleteProtection(Rule):
     id = "WAF-REL-003"
-    title = "Secret store has purge protection or soft delete disabled"
+    title = "Secret store has purge protection disabled"
     pillar = Pillar.WAF_RELIABILITY
     severity = Severity.HIGH
     kinds = (Kind.SECRET_STORE,)
     rationale = (
-        "WAF Reliability treats key material as unrecoverable state: without "
-        "soft delete and purge protection, one accidental delete permanently "
-        "destroys every secret encrypted under that key."
+        "WAF Reliability treats key material as unrecoverable state. Azure "
+        "Key Vault soft-delete is always on for new vaults (7-90 day "
+        "retention) but purge protection is optional and off by default; "
+        "without it a privileged user can purge a deleted vault or secret "
+        "immediately. Microsoft recommends purge protection when keys are "
+        "used for encryption, and services such as Storage require it for "
+        "customer-managed keys."
     )
-    remediation = "Enable soft delete retention and purge protection."
+    remediation = "Enable purge protection (and keep soft-delete retention at 7+ days)."
     terraform_fix = (
         "soft_delete_retention_days = 7\n"
         "purge_protection_enabled   = true"

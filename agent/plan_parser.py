@@ -206,6 +206,47 @@ def _inherit_region(rtype: str, after: Dict[str, Any], regions: Dict[str, str]) 
             return
 
 
+def _collect_references(node: Any, out: List[str]) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "references" and isinstance(value, list):
+                out.extend(str(v) for v in value)
+            else:
+                _collect_references(value, out)
+    elif isinstance(node, list):
+        for value in node:
+            _collect_references(value, out)
+
+
+def _dependency_edges(data: Dict[str, Any], known: set) -> Dict[str, List[str]]:
+    """Resource -> resources it references, from `configuration.root_module`.
+
+    A reference such as ``azurerm_subnet.app.id`` is reduced to the address
+    ``azurerm_subnet.app``; anything that is not a resource in this plan
+    (variables, data sources, locals) is ignored.
+    """
+    module = (data.get("configuration") or {}).get("root_module") or {}
+    edges: Dict[str, List[str]] = {}
+    for res in module.get("resources", []) or []:
+        address = res.get("address")
+        if address not in known:
+            continue
+        refs: List[str] = []
+        _collect_references(res.get("expressions", {}), refs)
+        refs.extend(str(d) for d in res.get("depends_on", []) or [])
+        targets = []
+        for ref in refs:
+            parts = ref.split(".")
+            for end in (2, 4):  # "type.name", or "module.m.type.name"
+                cand = ".".join(parts[:end])
+                if cand in known and cand != address and cand not in targets:
+                    targets.append(cand)
+                    break
+        if targets:
+            edges[address] = targets
+    return edges
+
+
 def parse_plan(data: Dict[str, Any]) -> PlanSummary:
     """Turn a decoded plan JSON document into a `PlanSummary`."""
     if not isinstance(data, dict):
@@ -250,6 +291,7 @@ def parse_plan(data: Dict[str, Any]) -> PlanSummary:
         terraform_version=data.get("terraform_version", "unknown"),
         format_version=data.get("format_version", "unknown"),
         providers=providers,
+        edges=_dependency_edges(data, {r.address for r in resources}),
     )
 
 

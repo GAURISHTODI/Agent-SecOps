@@ -10,19 +10,47 @@
 # only ever shown the handful of principles relevant to the resource in
 # front of it -- which is what keeps the LLM prompt (and its cost) small.
 # ---------------------------------------------------------------------
-version: 1
+version: 2
+
+# Provenance (checked against Microsoft Learn, 2026-10-27).
+#
+# * The Azure Well-Architected Framework has exactly FIVE pillars: Reliability,
+#   Security, Cost Optimization, Operational Excellence, Performance Efficiency.
+#   https://learn.microsoft.com/azure/well-architected/pillars
+# * "WAF:Sustainability" below is NOT an Azure WAF pillar. Sustainability is a
+#   sixth pillar of the AWS Well-Architected Framework (added 2021) and a
+#   Green Software Foundation topic; it is included as an extra lens, and
+#   findings tagged with it should be cited as such.
+# * The Cloud Adoption Framework has seven phases: Strategy, Plan, Ready,
+#   Adopt, Govern, Secure, Manage. Azure landing zones belong to Ready.
+#   https://learn.microsoft.com/azure/cloud-adoption-framework/overview
+#   The four "CAF:*" labels below (Governance, LandingZone, CostManagement,
+#   Identity) are this project's own control areas, each mapped to the CAF
+#   phase it draws on (see `maps_to`). They are not official CAF categories.
+# * CAF and Azure WAF are Azure-specific. Applying them to AWS and GCP
+#   resources is an extrapolation of their intent (least privilege, encryption,
+#   backups, ...) to equivalent resource kinds, not guidance Microsoft wrote
+#   for those clouds. AWS and GCP publish their own frameworks.
 source_frameworks:
-  caf: "Microsoft Cloud Adoption Framework for Azure - Govern & Landing Zone methodologies"
-  waf: "Microsoft Azure Well-Architected Framework - 5 pillars (+ Sustainability, AWS WAF)"
+  caf: "Microsoft Cloud Adoption Framework for Azure (Ready, Govern, Secure, Manage phases)"
+  waf: "Microsoft Azure Well-Architected Framework (5 pillars) + Sustainability lens from the AWS Well-Architected Framework"
+sources:
+  - "https://learn.microsoft.com/azure/cloud-adoption-framework/overview"
+  - "https://learn.microsoft.com/azure/cloud-adoption-framework/ready/landing-zone/"
+  - "https://learn.microsoft.com/azure/cloud-adoption-framework/govern/"
+  - "https://learn.microsoft.com/azure/well-architected/pillars"
+  - "https://learn.microsoft.com/azure/key-vault/general/soft-delete-overview"
 
 pillars:
   CAF:Governance:
+    maps_to: "CAF Govern phase (policies, enforcement, compliance monitoring); naming and tagging standards"
     question: "Is this change adopted the right way at portfolio level?"
     principles:
       - "Every resource carries ownership, environment and cost-attribution metadata."
       - "Names follow a predictable convention so automation and billing can group resources."
       - "Resource lifecycle (who deletes this, and when) is knowable from the resource itself."
   CAF:LandingZone:
+    maps_to: "CAF Ready phase - Azure landing zones (platform vs workload landing zones, policy guardrails)"
     question: "Does the resource land inside the approved platform boundary?"
     principles:
       - "Workloads deploy only to approved regions for residency and latency commitments."
@@ -30,18 +58,21 @@ pillars:
       - "Internet ingress arrives through shared, inspected platform edge services."
       - "Subscription/project placement matches the workload's environment tier."
   CAF:CostManagement:
+    maps_to: "CAF Govern/Manage phases - cost management and budgets"
     question: "Is the spend this creates governed and attributable?"
     principles:
       - "Billable resources are attributable to a budget owner before provisioning."
       - "Environments have budget alerts configured before workloads are deployed."
       - "Right-sizing is decided at design time, not after the first invoice."
   CAF:Identity:
+    maps_to: "CAF Secure phase and the identity & access design area of Ready (least privilege)"
     question: "Is the authority granted the minimum required?"
     principles:
       - "No wildcard actions, no primitive Owner roles, no subscription-scoped Contributor."
       - "Prefer managed identities and workload identity federation over static secrets."
       - "Grants are scoped to the narrowest resource that satisfies the requirement."
   WAF:Security:
+    maps_to: "Azure WAF pillar: Security"
     question: "Is this resource built to resist compromise?"
     principles:
       - "Encrypt in transit (TLS 1.2+) and at rest; prefer customer-managed keys for regulated data."
@@ -49,6 +80,7 @@ pillars:
       - "Secrets come from a secret store at runtime, never from source or state."
       - "Authentication is identity-based; disable shared keys and anonymous access."
   WAF:Reliability:
+    maps_to: "Azure WAF pillar: Reliability"
     question: "Will this survive the failures it is expected to survive?"
     principles:
       - "Production data survives the loss of a single datacentre (zone or geo redundancy)."
@@ -56,24 +88,28 @@ pillars:
       - "Deletion of stateful resources is guarded against accident and automation error."
       - "Single-instance compute is acceptable only where the workload tolerates downtime."
   WAF:CostOptimization:
+    maps_to: "Azure WAF pillar: Cost Optimization"
     question: "Does this deliver its value at the lowest reasonable cost?"
     principles:
       - "SKU matches the environment: burstable/basic below production."
       - "Always-on allocations are justified by always-on demand."
       - "Prefer consumption/serverless tiers for spiky or low-volume workloads."
   WAF:OperationalExcellence:
+    maps_to: "Azure WAF pillar: Operational Excellence"
     question: "Can we run, observe and recover this in production?"
     principles:
       - "Every component emits logs and metrics to a retained, queryable destination."
       - "Alerting exists on the signals that indicate the workload is failing."
       - "Changes are reproducible: no click-ops drift, no unpinned provider versions."
   WAF:PerformanceEfficiency:
+    maps_to: "Azure WAF pillar: Performance Efficiency"
     question: "Does capacity track demand?"
     principles:
       - "Capacity scales elastically rather than being permanently over-provisioned."
       - "Data services are sized on measured throughput, not guesswork."
       - "Caching and CDN are used where read patterns justify them."
   WAF:Sustainability:
+    maps_to: "NOT an Azure WAF pillar - AWS Well-Architected Sustainability pillar / Green Software Foundation"
     question: "Is the resource footprint proportionate to the value delivered?"
     principles:
       - "Cold data is tiered out of hot storage on a lifecycle policy."

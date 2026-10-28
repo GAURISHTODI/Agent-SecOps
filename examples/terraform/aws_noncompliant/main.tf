@@ -70,6 +70,9 @@ resource "aws_db_instance" "main" {
   backup_retention_period = 0
   skip_final_snapshot     = true
   publicly_accessible     = true
+  # Puts the database behind the internet-open security group below, so the
+  # plan carries a real dependency edge for the graph reasoner to follow.
+  vpc_security_group_ids = [aws_security_group.web.id]
   tags                    = { environment = "dev", owner = "team-b" }
 }
 

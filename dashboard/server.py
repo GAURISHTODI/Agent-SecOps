@@ -1,8 +1,10 @@
 """Dashboard backend -- a tiny HTTP server around the gate engine.
 
-This exists purely to make the project demonstrable in a browser. The gate
-itself does not need it: in the real pipeline the agent is a CLI whose exit
-code is the decision. The dashboard is the presentation layer for a viva.
+The gate itself does not need it: in the real pipeline the agent is a CLI
+whose exit code is the decision. The dashboard is the interactive front end
+for the same engine: pick or upload a Terraform plan, optionally run a real
+`terraform plan` on a seeded module, and get the verdict, the per-layer
+trace and downloadable reports.
 
 Deliberately built on the Python standard library only, so it adds zero
 dependencies to a project whose whole argument is that the gate must be
@@ -14,19 +16,25 @@ cheap and easy to run.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
 import webbrowser
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = Path(__file__).resolve().parent / "static"
 PLANS = ROOT / "examples" / "plans"
+TF_MODULES = ROOT / "examples" / "terraform"
 POLICY = ROOT / "policies" / "policy.yaml"
 
 sys.path.insert(0, str(ROOT))
@@ -34,7 +42,7 @@ sys.path.insert(0, str(ROOT))
 from agent.config import ReasonerConfig, load_policy  # noqa: E402
 from agent.engine import evaluate_plan  # noqa: E402
 from agent.plan_parser import PlanParseError, load_plan, parse_plan  # noqa: E402
-from agent.report import render_markdown  # noqa: E402
+from agent.report import render_json, render_markdown, render_sarif  # noqa: E402
 from agent.rules.base import all_rules  # noqa: E402
 
 # Friendly names for the shipped fixtures, so the dropdown reads like a demo
@@ -44,6 +52,7 @@ PLAN_LABELS = {
     "azure_noncompliant.plan.json": "Azure - seeded misconfigurations",
     "aws_noncompliant.plan.json": "AWS - seeded misconfigurations",
     "gcp_noncompliant.plan.json": "GCP - seeded misconfigurations",
+    "team_demo.plan.json": "Team demo - resourceA (Azure) / B (AWS) / C (GCP)",
 }
 
 _CONTENT_TYPES = {
@@ -54,6 +63,8 @@ _CONTENT_TYPES = {
     ".json": "application/json; charset=utf-8",
     ".svg": "image/svg+xml",
 }
+
+_REASONERS = ("offline", "none", "azure_openai", "anthropic")
 
 
 def _policy_for(reasoner: str):
@@ -71,11 +82,25 @@ def _policy_for(reasoner: str):
     return policy
 
 
-def _result_payload(plan, reasoner: str, plan_name: str) -> Dict[str, Any]:
+def _result_payload(
+    plan, reasoner: str, plan_name: str, source: str = "fixture", sha256: str = ""
+) -> Dict[str, Any]:
     result = evaluate_plan(plan, _policy_for(reasoner))
     payload = result.to_dict()
     payload["plan_name"] = plan_name
+    payload["source"] = source
+    payload["plan_sha256"] = sha256
+    payload["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # The same renderers the CLI uses, so a downloaded report is exactly what
+    # the pipeline would have produced for this plan.
     payload["markdown"] = render_markdown(result)
+    payload["report_json"] = render_json(result)
+    payload["sarif"] = render_sarif(result)
+
+    per_resource: Dict[str, int] = {}
+    for f in result.findings:
+        if not f.waived:
+            per_resource[f.resource_address] = per_resource.get(f.resource_address, 0) + 1
     payload["resources"] = [
         {
             "address": r.address,
@@ -83,14 +108,116 @@ def _result_payload(plan, reasoner: str, plan_name: str) -> Dict[str, Any]:
             "cloud": r.provider.value,
             "kind": r.kind.value,
             "action": r.action.value,
+            "findings": per_resource.get(r.address, 0),
         }
         for r in plan.mutating
     ]
     return payload
 
 
+def _plan_catalog() -> Dict[str, Dict[str, Any]]:
+    """Every plan the dashboard may evaluate, keyed by a safe opaque name.
+
+    Looking names up here (instead of joining a query parameter onto a path)
+    means a request can never read a file outside these two directories.
+    """
+    catalog: Dict[str, Dict[str, Any]] = {}
+    for f in sorted(PLANS.glob("*.plan.json")):
+        catalog[f.name] = {
+            "file": f.name,
+            "label": PLAN_LABELS.get(f.name, f.stem),
+            "group": "Hand-written fixtures",
+            "path": f,
+        }
+    if TF_MODULES.is_dir():
+        for d in sorted(TF_MODULES.iterdir()):
+            if d.is_dir() and (d / "plan.json").is_file():
+                key = "terraform/{}".format(d.name)
+                catalog[key] = {
+                    "file": key,
+                    "label": "Real terraform plan - {}".format(d.name),
+                    "group": "Real terraform plan output",
+                    "path": d / "plan.json",
+                }
+    return catalog
+
+
+def _find_terraform() -> Optional[str]:
+    """Locate the terraform executable.
+
+    A terminal opened before Terraform was installed (or an IDE-launched one)
+    often has a stale PATH, so `shutil.which` alone reports "not found" for a
+    perfectly good install. Check, in order: SECOPS_TERRAFORM, PATH, then the
+    places winget, Chocolatey and the official installer put it.
+    """
+    explicit = os.environ.get("SECOPS_TERRAFORM")
+    if explicit and Path(explicit).is_file():
+        return explicit
+    found = shutil.which("terraform")
+    if found:
+        return found
+    names = ("terraform.exe", "terraform")
+    roots: List[Path] = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        roots += list(Path(local, "Microsoft", "WinGet", "Packages").glob("Hashicorp.Terraform*"))
+        roots.append(Path(local, "Microsoft", "WinGet", "Links"))
+    for env in ("ProgramFiles", "ProgramFiles(x86)"):
+        base = os.environ.get(env)
+        if base:
+            roots += [Path(base, "Terraform"), Path(base, "HashiCorp", "Terraform")]
+    choco = os.environ.get("ChocolateyInstall")
+    if choco:
+        roots.append(Path(choco, "bin"))
+    roots += [Path("/usr/local/bin"), Path("/usr/bin")]
+    for root in roots:
+        for name in names:
+            candidate = root / name
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def _tf_modules() -> List[str]:
+    """Modules that can be planned from the dashboard.
+
+    Only directories under examples/terraform that hold a main.tf. The
+    deployable infra/demo module is deliberately not listed: the dashboard
+    never touches live infrastructure.
+    """
+    if not TF_MODULES.is_dir():
+        return []
+    return [
+        d.name for d in sorted(TF_MODULES.iterdir())
+        if d.is_dir() and (d / "main.tf").is_file()
+    ]
+
+
+def _run_step(name: str, cmd: List[str], cwd: Path, timeout: int) -> Dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(cwd), capture_output=True, timeout=timeout,
+            env={**os.environ, "TF_IN_AUTOMATION": "1"},
+        )
+        out = proc.stdout.decode("utf-8", "replace")
+        err = proc.stderr.decode("utf-8", "replace")
+        ok = proc.returncode == 0
+    except subprocess.TimeoutExpired:
+        out, err, ok = "", "timed out after {}s".format(timeout), False
+    shown = out if ok else (err or out)
+    return {
+        "name": name,
+        "cmd": " ".join(cmd[1:4]),
+        "ms": int((time.perf_counter() - started) * 1000),
+        "ok": ok,
+        "tail": shown.strip().splitlines()[-12:],
+        "_stdout": out,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AgentSecOpsDashboard/1.0"
+    server_version = "AgentSecOpsDashboard/2.0"
 
     # --- plumbing ----------------------------------------------------
     def log_message(self, fmt: str, *args: Any) -> None:
@@ -118,15 +245,27 @@ class Handler(BaseHTTPRequestHandler):
     # --- routing -----------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
         route = urlparse(self.path)
-        path = route.path
-        query = parse_qs(route.query)
-
-        if path.startswith("/api/"):
-            return self._api_get(path, query)
-        return self._static(path)
+        if route.path.startswith("/api/"):
+            return self._api_get(route.path, parse_qs(route.query))
+        return self._static(route.path)
 
     def do_POST(self) -> None:  # noqa: N802
         route = urlparse(self.path)
+        query = parse_qs(route.query)
+        if route.path == "/api/terraform/run":
+            return self._terraform_run(query)
+        if route.path == "/api/report/pdf":
+            length = int(self.headers.get("Content-Length", 0))
+            if length <= 0 or length > 8 * 1024 * 1024:
+                return self._error("Report body must be between 1 byte and 8 MB.")
+            try:
+                result = json.loads(self.rfile.read(length).decode("utf-8"))
+                from dashboard.pdf import build_report_pdf
+
+                pdf = build_report_pdf(result)
+            except (ValueError, KeyError, TypeError) as exc:
+                return self._error("Could not build the PDF: {}".format(exc))
+            return self._send(200, pdf, "application/pdf")
         if route.path != "/api/evaluate":
             return self._error("Unknown endpoint", 404)
 
@@ -134,28 +273,97 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0 or length > 8 * 1024 * 1024:
             return self._error("Plan body must be between 1 byte and 8 MB.")
 
+        body = self.rfile.read(length)
         try:
-            raw = json.loads(self.rfile.read(length).decode("utf-8"))
+            # utf-8-sig: PowerShell's Out-File writes a BOM.
+            raw = json.loads(body.decode("utf-8-sig"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            return self._error("Uploaded file is not valid JSON: {}".format(exc))
+            return self._error("That is not valid JSON: {}".format(exc))
 
-        reasoner = parse_qs(urlparse(self.path).query).get("reasoner", ["offline"])[0]
+        reasoner = query.get("reasoner", ["offline"])[0]
+        if reasoner not in _REASONERS:
+            return self._error("Unknown reasoner: {}".format(reasoner))
+        label = (query.get("name", [""])[0] or "uploaded plan")[:120]
         try:
             plan = parse_plan(raw)
         except PlanParseError as exc:
             return self._error(str(exc))
-        return self._json(_result_payload(plan, reasoner, "uploaded plan"))
+        return self._json(
+            _result_payload(
+                plan, reasoner, label, "Uploaded or pasted",
+                hashlib.sha256(body).hexdigest()[:16],
+            )
+        )
+
+    def _terraform_run(self, query: Dict[str, list]) -> None:
+        """Run the real pipeline: terraform init -> plan -> show -json -> gate."""
+        module = query.get("module", [""])[0]
+        reasoner = query.get("reasoner", ["offline"])[0]
+        if module not in _tf_modules():
+            return self._error("Unknown terraform module: {}".format(module), 404)
+        if reasoner not in ("offline", "none"):
+            return self._error("Unknown reasoner: {}".format(reasoner))
+        tf = _find_terraform()
+        if not tf:
+            return self._error(
+                "terraform was not found. Install it (winget install Hashicorp.Terraform), "
+                "or set SECOPS_TERRAFORM to the full path of terraform.exe, then restart "
+                "the dashboard. The pre-generated plans in the dropdown still work."
+            )
+
+        cwd = TF_MODULES / module
+        steps: List[Dict[str, Any]] = []
+        for name, cmd, timeout in (
+            ("terraform init", [tf, "init", "-backend=false", "-input=false", "-no-color"], 300),
+            ("terraform plan", [tf, "plan", "-out=tf.plan", "-input=false",
+                                "-refresh=false", "-no-color"], 300),
+            ("terraform show -json", [tf, "show", "-json", "tf.plan"], 60),
+        ):
+            step = _run_step(name, cmd, cwd, timeout)
+            steps.append(step)
+            if not step["ok"]:
+                for st in steps:
+                    st.pop("_stdout", None)
+                return self._json({
+                    "error": "{} failed in examples/terraform/{}. See the step log below.".format(
+                        name, module),
+                    "pipeline": steps,
+                }, 422)
+
+        plan_text = steps[-1]["_stdout"]
+        (cwd / "plan.json").write_text(plan_text, encoding="utf-8")
+        started = time.perf_counter()
+        try:
+            plan = parse_plan(json.loads(plan_text))
+        except (PlanParseError, json.JSONDecodeError) as exc:
+            return self._error(str(exc))
+        payload = _result_payload(
+            plan, reasoner, "terraform/{}".format(module), "Real terraform plan output",
+            hashlib.sha256(plan_text.encode("utf-8")).hexdigest()[:16],
+        )
+        steps.append({
+            "name": "agent gate",
+            "cmd": "evaluate_plan",
+            "ok": True,
+            "ms": int((time.perf_counter() - started) * 1000),
+            "tail": ["verdict: {}".format(payload["verdict"].upper())],
+        })
+        for st in steps:
+            st.pop("_stdout", None)
+        payload["pipeline"] = steps
+        return self._json(payload)
 
     # --- endpoints ---------------------------------------------------
     def _api_get(self, path: str, query: Dict[str, list]) -> None:
         if path == "/api/plans":
-            plans = []
-            for f in sorted(PLANS.glob("*.plan.json")):
-                plans.append({
-                    "file": f.name,
-                    "label": PLAN_LABELS.get(f.name, f.stem),
-                })
-            return self._json({"plans": plans})
+            return self._json({
+                "plans": [
+                    {k: v for k, v in entry.items() if k != "path"}
+                    for entry in _plan_catalog().values()
+                ],
+                "terraform_modules": _tf_modules(),
+                "terraform_available": _find_terraform() is not None,
+            })
 
         if path == "/api/rules":
             return self._json({
@@ -178,18 +386,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/evaluate":
             name = query.get("plan", [""])[0]
             reasoner = query.get("reasoner", ["offline"])[0]
-            if reasoner not in ("offline", "none", "azure_openai", "anthropic"):
+            if reasoner not in _REASONERS:
                 return self._error("Unknown reasoner: {}".format(reasoner))
-
-            target = PLANS / name
-            # Never let a query parameter escape the fixtures directory.
-            if not name or target.parent != PLANS or not target.exists():
+            entry = _plan_catalog().get(name)
+            if not entry:
                 return self._error("Unknown plan: {}".format(name), 404)
             try:
-                plan = load_plan(str(target))
+                plan = load_plan(str(entry["path"]))
             except PlanParseError as exc:
                 return self._error(str(exc))
-            return self._json(_result_payload(plan, reasoner, name))
+            digest = hashlib.sha256(entry["path"].read_bytes()).hexdigest()[:16]
+            return self._json(_result_payload(plan, reasoner, name, entry["group"], digest))
 
         if path == "/api/benchmark":
             from scripts.benchmark import evaluate as run_benchmark

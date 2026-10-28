@@ -47,6 +47,8 @@ const VERDICT_COPY = {
 function useTheme() {
   const [theme, setTheme] = useState(() => {
     // A blocked/private context throws on access, so never read it bare.
+    const forced = new URLSearchParams(window.location.search).get("theme");
+    if (forced === "light" || forced === "dark") return forced;
     try { return localStorage.getItem("secops-theme") || "system"; }
     catch (e) { return "system"; }
   });
@@ -525,9 +527,88 @@ function RulesTab() {
 
 /* --- gate tab -------------------------------------------------------- */
 
-function GateTab({ result, loading, tooltip }) {
+/* Stages shown while the display is paced. Timings are the engine's own
+   measurements, read from the finished result. */
+function stageList(d) {
+  const st = d.stats || {};
+  const ms = st.stage_ms || {};
+  const reasoningOn = st.graph_nodes !== undefined;
+  return [
+    { name: "Parse plan", note: d.resources_evaluated + " resource(s) mapped to canonical kinds", ms: null },
+    { name: "Layer 1 · deterministic rules",
+      note: (st.rules_evaluated || 0) + " rules checked → " + (st.findings_from_rules || 0) + " finding(s)",
+      ms: ms.layer1_rules },
+    { name: "Layer 2 · reasoning probes",
+      note: reasoningOn
+        ? ((st.findings_from_reasoner || 0) - (st.findings_from_graph || 0)) + " finding(s)"
+        : "switched off",
+      ms: ms.layer2_reasoning },
+    { name: "Layer 2b · dependency-graph risk propagation",
+      note: reasoningOn
+        ? st.graph_nodes + " nodes, " + st.graph_edges + " edges → " + (st.findings_from_graph || 0) + " compound-risk finding(s)"
+        : "switched off", ms: null },
+    { name: "Layer 3 · policy & waivers", note: "thresholds and expiring waivers applied", ms: ms.layer3_policy },
+    { name: "Verdict", note: String(d.verdict).toUpperCase(), ms: null },
+  ];
+}
+
+/* Reveal the stages one by one (about 1 s each). Resolves when finished. */
+function stepThrough(d, setPacing, stillCurrent) {
+  const stages = stageList(d);
+  return new Promise((resolve) => {
+    let step = 0;
+    setPacing({ step, stages, d });
+    const tick = () => {
+      if (!stillCurrent()) return resolve();
+      step += 1;
+      setPacing({ step, stages, d });
+      if (step >= stages.length) setTimeout(resolve, 600);
+      else setTimeout(tick, 1000);
+    };
+    setTimeout(tick, 900);
+  });
+}
+
+function PacingPanel({ pacing }) {
+  const { step, stages, d } = pacing;
+  return (
+    <div className="panel">
+      <h2>Running the gate&hellip;</h2>
+      <p className="panel-sub">
+        <strong>Presentation pacing is on:</strong> the display steps through the
+        stages slowly so each one can be explained. The engine itself finished
+        in <strong>{d.duration_ms} ms</strong>; each stage's real measured time
+        appears as it completes. Switch pacing off above to see it at full speed.
+      </p>
+      <ol className="trace">
+        {stages.map((st, i) => {
+          const done = i < step;
+          const active = i === step;
+          return (
+            <li key={i} className={done ? "ok" : active ? "active" : "pending"}>
+              <span className="dot">{done ? "✓" : active ? "…" : "·"}</span>
+              <span className="t-name">{st.name}</span>
+              <span className="t-note">{done || active ? st.note : ""}</span>
+              <span className="t-ms">{done && st.ms != null ? st.ms + " ms" : ""}</span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+function GateTab({ result, loading, tooltip, steps, pacing }) {
+  if (loading && pacing) return <PacingPanel pacing={pacing} />;
   if (loading) return <div className="spinner">Evaluating the plan&hellip;</div>;
-  if (!result) return null;
+  if (!result) {
+    return (
+      <div className="empty">
+        Choose a plan above, upload or drop a <code>plan.json</code>, paste one, or
+        run a real <code>terraform plan</code>.
+      </div>
+    );
+  }
 
   const v = VERDICT_COPY[result.verdict];
   const stats = result.stats || {};
@@ -554,6 +635,12 @@ function GateTab({ result, loading, tooltip }) {
           <code>{v.exit}</code>
         </span>
       </div>
+
+      <SourceBar result={result} />
+      <ExportBar result={result} />
+      <PipelineSteps steps={steps} />
+      <PipelineTrace result={result} steps={steps} />
+      <GraphPanel key={result.generated_at + result.plan_name} result={result} />
 
       <div className="tiles">
         <div className="tile">
@@ -627,8 +714,534 @@ function GateTab({ result, loading, tooltip }) {
         </div>
       </div>
 
+      <ResourceTable result={result} />
       <FindingsPanel result={result} />
     </React.Fragment>
+  );
+}
+
+/* --- evidence panels: proof that the plan was really processed --------- */
+
+function shortHash(h) { return h ? h.slice(0, 12) : "n/a"; }
+
+/* Where the result came from, and when. Without this a result looks
+   identical whether it was just computed or preloaded. */
+function SourceBar({ result }) {
+  return (
+    <div className="source-bar">
+      <span><strong>Plan</strong> <code>{result.plan_name}</code></span>
+      <span><strong>Source</strong> {result.source}</span>
+      <span title="SHA-256 of the exact bytes that were evaluated">
+        <strong>SHA-256</strong> <code>{shortHash(result.plan_sha256)}</code>
+      </span>
+      <span><strong>Evaluated</strong> {new Date(result.generated_at).toLocaleTimeString()}</span>
+      <span><strong>Terraform</strong> {result.terraform_version || "n/a"}</span>
+    </div>
+  );
+}
+
+/* Measured wall time per layer, straight from the engine. */
+function PipelineTrace({ result, steps }) {
+  const s = (result.stats || {}).stage_ms || {};
+  const stages = [
+    ...(steps || []).filter((x) => x.name !== "agent gate").map((x) => ({
+      name: x.name, ms: x.ms, ok: x.ok, note: "real terraform CLI",
+    })),
+    { name: "Parse plan", ms: null, ok: true,
+      note: result.resources_evaluated + " resource(s) normalised" },
+    { name: "Layer 1 · deterministic rules", ms: s.layer1_rules, ok: true,
+      note: ((result.stats || {}).rules_evaluated || 0) + " rules → " +
+            ((result.stats || {}).findings_from_rules || 0) + " findings" },
+    { name: "Layer 2 · reasoning (" + result.reasoner + ")", ms: s.layer2_reasoning, ok: true,
+      note: (((result.stats || {}).findings_from_reasoner || 0) -
+             ((result.stats || {}).findings_from_graph || 0)) + " findings" },
+    ...((result.stats || {}).graph_nodes === undefined ? [] : [{
+      name: "Layer 2b · dependency-graph risk propagation", ms: null, ok: true,
+      note: (result.stats.graph_nodes) + " nodes, " + (result.stats.graph_edges) +
+            " edges → " + (result.stats.findings_from_graph || 0) + " compound-risk finding(s)",
+    }]),
+    { name: "Layer 3 · policy & waivers", ms: s.layer3_policy, ok: true,
+      note: "verdict " + result.verdict.toUpperCase() },
+  ];
+  return (
+    <div className="panel" style={{ marginBottom: 14 }}>
+      <h2>Processing trace</h2>
+      <p className="panel-sub">
+        Every stage this plan went through, with measured time. These are real
+        timings from the engine, not an animation.
+      </p>
+      <ol className="trace">
+        {stages.map((st, i) => (
+          <li key={i} className={st.ok ? "ok" : "bad"}>
+            <span className="dot">{st.ok ? "✓" : "✕"}</span>
+            <span className="t-name">{st.name}</span>
+            <span className="t-note">{st.note}</span>
+            <span className="t-ms">{st.ms == null ? "" : st.ms + " ms"}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/* Every resource that was parsed, with its canonical kind. Shows the
+   multi-cloud normalisation and how many findings each one drew. */
+function ResourceTable({ result }) {
+  const rows = result.resources || [];
+  return (
+    <div className="panel" style={{ marginBottom: 14 }}>
+      <h2>Resources parsed from the plan</h2>
+      <p className="panel-sub">
+        Each Terraform resource is mapped to a cloud-agnostic kind, so one rule
+        covers Azure, AWS and GCP.
+      </p>
+      <table className="data">
+        <thead>
+          <tr><th>Resource</th><th>Cloud</th><th>Canonical kind</th><th>Action</th><th>Findings</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.address}>
+              <td><code>{r.address}</code></td>
+              <td>{r.cloud}</td>
+              <td>{r.kind}</td>
+              <td>{r.action}</td>
+              <td className="num">{r.findings}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* --- dependency-graph visualisation ------------------------------------ */
+
+const KIND_GLYPH = {
+  object_storage: "\u{1FAA3}", managed_database: "\u{1F5C4}️", network_firewall: "\u{1F525}",
+  network_public_ip: "\u{1F310}", secret_store: "\u{1F511}", iam_binding: "\u{1F6E1}️",
+  compute_instance: "\u{1F5A5}️", container_platform: "☸️", app_hosting: "\u{1F9E9}",
+  log_workspace: "\u{1F4C8}", other: "◆",
+};
+const riskColor = (r) => (r >= 0.45 ? "#ff4d6d" : r >= 0.2 ? "#ffc857" : "#3ddc97");
+const GW = 960, GH = 540;
+
+/* Small deterministic force layout: repulsion between all nodes, springs on
+   edges, gentle gravity to the centre. No library, no randomness. */
+function forceLayout(nodes, edges) {
+  const n = nodes.length;
+  const idx = {}; nodes.forEach((nd, i) => { idx[nd.id] = i; });
+  const p = nodes.map((_, i) => ({
+    x: GW / 2 + Math.cos((2 * Math.PI * i) / n) * GH * 0.32,
+    y: GH / 2 + Math.sin((2 * Math.PI * i) / n) * GH * 0.32, vx: 0, vy: 0,
+  }));
+  for (let it = 0; it < 420; it++) {
+    const cool = 1 - it / 420;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      let dx = p[i].x - p[j].x, dy = p[i].y - p[j].y;
+      const d2 = Math.max(dx * dx + dy * dy, 60);
+      const f = 52000 / d2, d = Math.sqrt(d2);
+      dx = (dx / d) * f; dy = (dy / d) * f;
+      p[i].vx += dx; p[i].vy += dy; p[j].vx -= dx; p[j].vy -= dy;
+    }
+    edges.forEach(([a, b]) => {
+      const i = idx[a], j = idx[b];
+      if (i === undefined || j === undefined) return;
+      const dx = p[j].x - p[i].x, dy = p[j].y - p[i].y;
+      const d = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
+      const f = (d - 170) * 0.035;
+      p[i].vx += (dx / d) * f; p[i].vy += (dy / d) * f;
+      p[j].vx -= (dx / d) * f; p[j].vy -= (dy / d) * f;
+    });
+    p.forEach((q) => {
+      q.vx += (GW / 2 - q.x) * 0.012; q.vy += (GH / 2 - q.y) * 0.012;
+      q.x += q.vx * 0.5 * cool; q.y += q.vy * 0.5 * cool; q.vx *= 0.6; q.vy *= 0.6;
+      q.x = Math.min(GW - 90, Math.max(90, q.x)); q.y = Math.min(GH - 100, Math.max(80, q.y));
+    });
+  }
+  return p;
+}
+
+function GraphPanel({ result }) {
+  const model = (result.stats || {}).graph_model;
+  const qs = new URLSearchParams(window.location.search);
+  // Open by default whenever the plan actually has links to show.
+  const [open, setOpen] = useState(
+    qs.get("graph") === "open" || qs.get("graph") !== "closed" && !!model && model.edges.length > 0
+  );
+  const [step, setStep] = useState(parseInt(qs.get("gstep") || "0", 10) || 0);  // 0 = idle
+  const [sel, setSel] = useState(null);
+  const timer = useRef(null);
+
+  const g = useMemo(() => {
+    if (!model || !model.nodes.length) return null;
+    const pos = forceLayout(model.nodes, model.edges);
+    const idx = {}; model.nodes.forEach((nd, i) => { idx[nd.id] = i; });
+    const adj = model.nodes.map(() => []);
+    model.edges.forEach(([a, b]) => {
+      if (idx[a] !== undefined && idx[b] !== undefined) { adj[idx[a]].push(idx[b]); adj[idx[b]].push(idx[a]); }
+    });
+    // multi-source BFS: hop distance from the nearest exposure source
+    const decay = (model.params || {}).decay || 0.75;
+    const dist = model.nodes.map(() => Infinity);
+    const arriving = model.nodes.map(() => 0);
+    const queue = [];
+    model.nodes.forEach((nd, i) => { if (nd.exposure_self >= 0.3) { dist[i] = 0; arriving[i] = nd.exposure_self; queue.push(i); } });
+    for (let h = 0; h < queue.length; h++) {
+      const u = queue[h];
+      adj[u].forEach((v) => {
+        if (dist[v] === Infinity) { dist[v] = dist[u] + 1; arriving[v] = arriving[u] * decay; queue.push(v); }
+      });
+    }
+    const maxDist = Math.max(0, ...dist.filter((d) => d !== Infinity));
+    const flaggedEdge = {};
+    (model.flagged_paths || []).forEach((fp) => {
+      for (let i = 0; i + 1 < fp.path.length; i++) flaggedEdge[fp.path[i] + ">" + fp.path[i + 1]] = true;
+    });
+    return { pos, idx, dist, arriving, maxDist, total: maxDist + 2, flaggedEdge };
+  }, [model]);
+
+  useEffect(() => () => clearInterval(timer.current), []);
+  if (!model || !g) return null;
+
+  const simulate = () => {
+    clearInterval(timer.current);
+    setSel(null); setStep(1);
+    let s = 1;
+    timer.current = setInterval(() => {
+      s += 1; setStep(s);
+      if (s >= g.total) clearInterval(timer.current);
+    }, 1300);
+  };
+  const reset = () => { clearInterval(timer.current); setStep(0); setSel(null); };
+
+  const hasEdges = model.edges.length > 0;
+  const live = step === 0;                       // idle view: flagged paths pulse
+  const shown = (i) => step > 0 && g.dist[i] !== Infinity && g.dist[i] + 1 <= step;
+  const final = step >= g.total;
+  const focus = sel !== null ? model.nodes[g.idx[sel]] : null;
+  const short = (nd) => nd.type.replace(/^(azurerm|aws|google)_/, "");
+
+  return (
+    <div className="panel graph-panel-wrap">
+      <div className="gp-head">
+        <div>
+          <h2 style={{ margin: 0 }}>Dependency graph &mdash; how risk travels</h2>
+          <p className="panel-sub" style={{ margin: "4px 0 0" }}>
+            Nodes are the planned resources, links are Terraform references. Exposure spreads along
+            the links, weaker at every hop; a node lights up red when the connection adds risk.
+          </p>
+        </div>
+        <button className="primary" onClick={() => setOpen(!open)}>
+          {open ? "Hide graph" : "\u{1F578} Show dependency graph"}
+        </button>
+      </div>
+
+      {!hasEdges && (
+        <div className="gp-nolinks">
+          <strong>This plan has no resource links to draw.</strong> Hand-written example files carry
+          no Terraform configuration block, so there is nothing connected. Choose{" "}
+          <em>Real terraform plan &ndash; aws_noncompliant</em> (or <em>noncompliant</em>) in the
+          Plan dropdown, or click <em>terraform plan &rarr; gate</em>, to see the graph.
+        </div>
+      )}
+
+      {open && (
+        <div className="graph-stage">
+          <div className="gp-bar">
+            <button className="primary" onClick={simulate} disabled={!hasEdges}>
+              {"▶"} Simulate exposure spread
+            </button>
+            <button className="gp-ghost" onClick={reset}>{"↺"} Reset</button>
+            <span className="gp-step">
+              {step === 0 ? "idle: flagged paths pulse" :
+               final ? "done: risk scores shown" :
+               step === 1 ? "step 1: exposure sources ignite" :
+               "step " + step + ": exposure reaches hop " + (step - 1)}
+            </span>
+            <span className="gp-legend">
+              <i style={{ background: "#ff9f1c" }} /> exposed
+              <i style={{ background: "#3ddc97" }} /> low risk
+              <i style={{ background: "#ffc857" }} /> medium
+              <i style={{ background: "#ff4d6d" }} /> high
+            </span>
+          </div>
+
+          <svg viewBox={"0 0 " + GW + " " + GH} className="gp-svg" role="img">
+            <defs>
+              <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+                <feGaussianBlur stdDeviation="5" result="b" />
+                <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+              <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+                <circle cx="2" cy="2" r="1" fill="#1d2747" />
+              </pattern>
+              <radialGradient id="bgfade" cx="50%" cy="45%" r="75%">
+                <stop offset="0%" stopColor="#101a3a" /><stop offset="100%" stopColor="#04060d" />
+              </radialGradient>
+            </defs>
+            <rect width={GW} height={GH} fill="url(#bgfade)" />
+            <rect width={GW} height={GH} fill="url(#dots)" />
+
+            {!hasEdges && (
+              <text x={GW / 2} y={GH - 22} textAnchor="middle" fill="#8aa0d6" fontSize="14">
+                No dependency edges in this plan. Hand-written fixtures carry no configuration
+                block; run the real pipeline to see links.
+              </text>
+            )}
+
+            {model.edges.map(([a, b], k) => {
+              const A = g.pos[g.idx[a]], B = g.pos[g.idx[b]];
+              if (!A || !B) return null;
+              const fwd = g.flaggedEdge[a + ">" + b], back = g.flaggedEdge[b + ">" + a];
+              const hot = fwd || back;
+              const [s, t] = back ? [B, A] : [A, B];
+              const ia = g.idx[a], ib = g.idx[b];
+              const simHot = step > 0 && shown(ia) && shown(ib);
+              const path = "M" + s.x + " " + s.y + " L" + t.x + " " + t.y;
+              return (
+                <g key={k}>
+                  <line x1={A.x} y1={A.y} x2={B.x} y2={B.y}
+                        stroke={hot && live ? "#ff4d6d" : simHot ? "#ff9f1c" : "#34406b"}
+                        strokeWidth={hot ? 2.6 : 1.6} opacity={hot || simHot ? 0.95 : 0.7}
+                        className={(hot && live) || simHot ? "gp-flow" : ""} />
+                  {((hot && live) || simHot) && [0, 0.55, 1.1].map((d) => (
+                    <circle key={d} r="4.5" fill={hot ? "#ff8fa3" : "#ffd29a"} filter="url(#glow)">
+                      <animateMotion dur="1.7s" begin={d + "s"} repeatCount="indefinite" path={path} />
+                    </circle>
+                  ))}
+                </g>
+              );
+            })}
+
+            {model.nodes.map((nd, i) => {
+              const q = g.pos[i];
+              const r = 18 + nd.asset * 13;
+              const src = nd.exposure_self >= 0.3;
+              const col = riskColor(nd.risk);
+              const lit = live ? true : shown(i);
+              const ring = nd.flagged && (live || final) ? "#ff4d6d" : col;
+              return (
+                <g key={nd.id} transform={"translate(" + q.x + "," + q.y + ")"}
+                   style={{ cursor: "pointer" }} onClick={() => setSel(nd.id)}
+                   opacity={live || lit || g.dist[i] === Infinity ? 1 : 0.55}>
+                  {src && lit && <circle r={r + 6} fill="none" stroke="#ff9f1c" strokeWidth="2" className="gp-radar" />}
+                  {nd.flagged && (live || final) && <circle r={r + 8} fill="none" stroke="#ff4d6d" strokeWidth="3" className="gp-alarm" />}
+                  <circle r={r} fill="#0a1128" stroke={live || final ? ring : lit && src ? "#ff9f1c" : "#46557f"}
+                          strokeWidth="3" filter={(live || lit) ? "url(#glow)" : undefined} />
+                  <text textAnchor="middle" dy="0.35em" fontSize={r * 0.95}>{KIND_GLYPH[nd.kind] || "◆"}</text>
+                  <text y={r + 24} textAnchor="middle" fill="#e6ecff" fontSize="13" fontWeight="600">{nd.label}</text>
+                  <text y={r + 38} textAnchor="middle" fill="#7f90c4" fontSize="10.5">{short(nd)}</text>
+                  {step > 0 && lit && !final && g.dist[i] !== Infinity && (
+                    <g transform={"translate(0," + (-r - 14) + ")"}>
+                      <rect x="-34" y="-12" width="68" height="20" rx="10" fill="#2a1a05" stroke="#ff9f1c" />
+                      <text textAnchor="middle" dy="0.3em" fill="#ffc46b" fontSize="12">
+                        {"exp " + (g.arriving[i]).toFixed(2)}
+                      </text>
+                    </g>
+                  )}
+                  {final && (
+                    <g transform={"translate(0," + (-r - 14) + ")"}>
+                      <rect x="-30" y="-12" width="60" height="20" rx="10" fill="#0a1128" stroke={ring} />
+                      <text textAnchor="middle" dy="0.3em" fill={ring} fontSize="12" fontWeight="700">
+                        {"R " + nd.risk.toFixed(2)}
+                      </text>
+                    </g>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+
+          <div className="gp-info">
+            {focus ? (
+              <div className="gp-card">
+                <div className="gp-card-title">
+                  {(KIND_GLYPH[focus.kind] || "") + " " + focus.id}
+                  <span className="gp-tag">{focus.cloud + " · " + focus.kind}</span>
+                  {focus.flagged && <span className="gp-tag bad">compound risk</span>}
+                </div>
+                <div className="gp-metrics">
+                  <span>exposure (own) <b>{focus.exposure_self.toFixed(2)}</b></span>
+                  <span>exposure (reaching) <b>{focus.exposure_reach.toFixed(2)}</b></span>
+                  <span>weakness <b>{focus.weakness.toFixed(2)}</b></span>
+                  <span>asset value <b>{focus.asset.toFixed(2)}</b></span>
+                  <span>risk <b style={{ color: riskColor(focus.risk) }}>{focus.risk.toFixed(2)}</b></span>
+                  <span>risk alone <b>{focus.risk_alone.toFixed(2)}</b></span>
+                </div>
+                {focus.weaknesses.length > 0 && <div className="gp-line">weaknesses: {focus.weaknesses.join(" · ")}</div>}
+                {focus.exposure_why.length > 0 && <div className="gp-line">exposure: {focus.exposure_why.join(" · ")}</div>}
+              </div>
+            ) : (
+              <div className="gp-hint">
+                Click any node for its numbers. Risk = reachable exposure {"×"} weakness {"×"} asset value.
+                A red ring is high risk on its own (a rule already reports it); only the
+                <strong> pulsing alarm ring</strong> marks a compound path the graph found.
+              </div>
+            )}
+            {(model.flagged_paths || []).map((fp, k) => (
+              <div className="gp-path" key={k}>
+                <span className={"chip " + fp.severity}>{fp.severity}</span>
+                <code>{fp.path.join("  →  ")}</code>
+                <span>risk {fp.risk.toFixed(2)}, connection adds {fp.uplift.toFixed(2)}</span>
+              </div>
+            ))}
+            {(model.flagged_paths || []).length === 0 && hasEdges && (
+              <div className="gp-hint">No compound path in this plan: the links add no extra risk.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* --- exports ---------------------------------------------------------- */
+
+function download(filename, text, mime) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function esc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/* A print-optimised report in a new window. The browser's own "Save as PDF"
+   produces the file, so there is no PDF library to install. */
+function openPrintReport(result) {
+  const v = VERDICT_COPY[result.verdict];
+  const active = result.findings.filter((f) => !f.waived);
+  const stats = result.stats || {};
+  const sevColor = { critical: "#a4121b", high: "#c2410c", medium: "#a16207", low: "#1d4ed8", info: "#475569" };
+  const rows = active.map((f) => `
+    <tr>
+      <td><b style="color:${sevColor[f.severity] || "#000"}">${esc(f.severity.toUpperCase())}</b></td>
+      <td><code>${esc(f.rule_id)}</code><br>${esc(f.pillar)}</td>
+      <td><code>${esc(f.resource)}</code></td>
+      <td><b>${esc(f.title)}</b><br>${esc(f.explanation)}<br>
+          <i>Fix:</i> ${esc(f.remediation)}
+          ${f.terraform_fix ? `<pre>${esc(f.terraform_fix)}</pre>` : ""}</td>
+      <td>${f.source === "rules" ? "rule" : "reasoning " + Math.round(f.confidence * 100) + "%"}</td>
+    </tr>`).join("");
+  const pillars = Object.entries(stats.by_pillar || {})
+    .map(([k, n]) => `<li>${esc(k)}: <b>${n}</b></li>`).join("");
+
+  const html = `<!doctype html><html><head><meta charset="utf-8">
+<title>Agent SecOps report - ${esc(result.plan_name)}</title>
+<style>
+  body{font:13px/1.45 system-ui,Segoe UI,Arial,sans-serif;color:#111;margin:28px}
+  h1{font-size:20px;margin:0 0 2px} h2{font-size:15px;margin:22px 0 6px}
+  .verdict{display:inline-block;padding:6px 14px;border-radius:6px;color:#fff;font-weight:700;
+           background:${result.verdict === "block" ? "#a4121b" : result.verdict === "remediate" ? "#a16207" : "#15803d"}}
+  .meta{color:#444;margin:8px 0} .meta span{margin-right:16px}
+  table{border-collapse:collapse;width:100%} th,td{border:1px solid #ccc;padding:6px 8px;vertical-align:top;text-align:left}
+  th{background:#f1f1ef} pre{background:#f6f6f4;padding:6px;margin:6px 0 0;white-space:pre-wrap}
+  code{font-family:Consolas,monospace;font-size:12px} ul{margin:4px 0;padding-left:18px}
+  .foot{margin-top:24px;color:#555;font-size:11px}
+  @media print{body{margin:12mm} tr{page-break-inside:avoid}}
+</style></head><body>
+<h1>Agent SecOps - CAF/WAF compliance report</h1>
+<div class="verdict">${v.label} &nbsp;(exit code ${v.exit})</div>
+<div class="meta">
+  <span><b>Plan:</b> ${esc(result.plan_name)}</span>
+  <span><b>Source:</b> ${esc(result.source)}</span>
+  <span><b>SHA-256:</b> ${esc(shortHash(result.plan_sha256))}</span>
+  <span><b>Generated:</b> ${esc(result.generated_at)}</span>
+  <span><b>Reasoning layer:</b> ${esc(result.reasoner)}</span>
+</div>
+<div class="meta">
+  <span><b>${result.resources_evaluated}</b> resources</span>
+  <span><b>${active.length}</b> active findings</span>
+  <span><b>${stats.findings_from_rules || 0}</b> from rules</span>
+  <span><b>${stats.findings_from_reasoner || 0}</b> from reasoning</span>
+  <span><b>${stats.findings_waived || 0}</b> waived</span>
+</div>
+<h2>Findings by framework pillar</h2><ul>${pillars || "<li>None</li>"}</ul>
+<h2>Findings</h2>
+${active.length ? `<table><thead><tr><th>Severity</th><th>Rule / pillar</th><th>Resource</th><th>Detail and fix</th><th>Source</th></tr></thead><tbody>${rows}</tbody></table>`
+                : "<p>No CAF or WAF violations in this plan.</p>"}
+<p class="foot">Generated by Agent SecOps (Project 19727UG01). Rules are mapped to the Microsoft
+Cloud Adoption Framework and Azure Well-Architected Framework; applying them to AWS and GCP resources
+extends the intent of those frameworks to equivalent resource kinds.</p>
+<script>window.addEventListener("load",function(){setTimeout(function(){window.print()},250)})</script>
+</body></html>`;
+
+  const w = window.open("", "_blank");
+  if (!w) { alert("Allow pop-ups for this page to open the printable report."); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+
+/* Real PDF file, built by the server from the result already on screen.
+   Falls back to the browser print view if the request fails. */
+function downloadPdf(result, base) {
+  fetch("/api/report/pdf", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      verdict: result.verdict, plan_name: result.plan_name, source: result.source,
+      plan_sha256: result.plan_sha256, generated_at: result.generated_at,
+      reasoner: result.reasoner, resources_evaluated: result.resources_evaluated,
+      stats: result.stats, findings: result.findings,
+    }),
+  })
+    .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); return r.blob(); })
+    .then((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = base + ".pdf";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    })
+    .catch(() => openPrintReport(result));
+}
+
+function ExportBar({ result }) {
+  const base = "secops-" + result.plan_name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
+  return (
+    <div className="export-bar">
+      <span className="export-label">Download report</span>
+      <button onClick={() => downloadPdf(result, base)}>PDF</button>
+      <button onClick={() => download(base + ".json", result.report_json, "application/json")}>JSON</button>
+      <button onClick={() => download(base + ".md", result.markdown, "text/markdown")}>Markdown</button>
+      <button onClick={() => download(base + ".sarif", result.sarif, "application/json")}>SARIF</button>
+    </div>
+  );
+}
+
+/* --- real terraform runner ------------------------------------------- */
+
+function PipelineSteps({ steps }) {
+  if (!steps || !steps.length) return null;
+  return (
+    <div className="panel" style={{ marginBottom: 14 }}>
+      <h2>Real pipeline run</h2>
+      <p className="panel-sub">
+        Output of the actual Terraform CLI on this machine, followed by the gate.
+      </p>
+      {steps.map((st, i) => (
+        <details key={i} className="finding" open={!st.ok}>
+          <summary>
+            <span className="chevron">&#9654;</span>
+            <span className={"chip " + (st.ok ? "low" : "critical")}>{st.ok ? "ok" : "failed"}</span>
+            <span className="f-title">
+              <div>{st.name}</div>
+              <div className="f-meta"><code>{st.cmd}</code> &middot; {st.ms} ms</div>
+            </span>
+          </summary>
+          <div className="body"><pre className="hcl">{(st.tail || []).join("\n")}</pre></div>
+        </details>
+      ))}
+    </div>
   );
 }
 
@@ -636,60 +1249,145 @@ function GateTab({ result, loading, tooltip }) {
 
 function App() {
   const [theme, setTheme] = useTheme();
-  const [plans, setPlans] = useState([]);
-  const [plan, setPlan] = useState("azure_noncompliant.plan.json");
-  const [reasoning, setReasoning] = useState(true);
-  const [tab, setTab] = useState("gate");
+  const [catalog, setCatalog] = useState({ plans: [], terraform_modules: [], terraform_available: false });
+  // `source` is the single thing being evaluated: a catalogued plan or text
+  // the user supplied. Toggling the reasoning layer re-evaluates THIS, so an
+  // uploaded plan is never silently swapped for a preloaded one.
+  // Optional deep links, handy for demos and screenshots:
+  //   /?plan=team_demo.plan.json&tab=benchmark&reasoning=off&run=aws_noncompliant
+  const query = useMemo(() => new URLSearchParams(window.location.search), []);
+  const [source, setSource] = useState({
+    type: "catalog",
+    key: query.get("plan") || "azure_noncompliant.plan.json",
+  });
+  const [reasoning, setReasoning] = useState(query.get("reasoning") !== "off");
+  const [tab, setTab] = useState(query.get("tab") || "gate");
   const [result, setResult] = useState(null);
+  const [steps, setSteps] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState("");
   const [error, setError] = useState(null);
+  const [errorSteps, setErrorSteps] = useState(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasted, setPasted] = useState("");
+  const [tfModule, setTfModule] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const skipRef = useRef(false);
+  const runId = useRef(0);
+  const [pace, setPace] = useState(query.get("pace") !== "off");
+  const [pacing, setPacing] = useState(null);
   const tooltip = useTooltip();
 
-  useEffect(() => {
-    fetch("/api/plans")
+  const loadCatalog = useCallback(() => {
+    return fetch("/api/plans")
       .then((r) => r.json())
-      .then((d) => setPlans(d.plans || []))
-      .catch(() => setPlans([]));
+      .then((d) => {
+        setCatalog(d);
+        setTfModule((cur) => cur || (d.terraform_modules || [])[0] || "");
+      })
+      .catch(() => {});
   }, []);
+  useEffect(() => { loadCatalog(); }, [loadCatalog]);
+
+  const reasoner = reasoning ? "offline" : "none";
 
   const evaluate = useCallback(() => {
     setLoading(true);
     setError(null);
-    const reasoner = reasoning ? "offline" : "none";
-    fetch(`/api/evaluate?plan=${encodeURIComponent(plan)}&reasoner=${reasoner}`)
-      .then((r) => r.json())
+    setErrorSteps(null);
+    const req = source.type === "catalog"
+      ? fetch(`/api/evaluate?plan=${encodeURIComponent(source.key)}&reasoner=${reasoner}`)
+      : fetch(`/api/evaluate?reasoner=${reasoner}&name=${encodeURIComponent(source.name)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: source.text,
+        });
+    const myRun = ++runId.current;
+    req.then((r) => r.json())
       .then((d) => {
-        if (d.error) { setError(d.error); setResult(null); }
-        else setResult(d);
+        if (myRun !== runId.current) return;          // a newer request took over
+        if (d.error) { setError(d.error); setResult(null); return; }
+        if (!pace) { setResult(d); return; }
+        // Presentation pacing: step through the stages so each can be explained.
+        return stepThrough(d, setPacing, () => myRun === runId.current).then(() => {
+          if (myRun === runId.current) setResult(d);
+        });
       })
       .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, [plan, reasoning]);
+      .finally(() => { if (myRun === runId.current) { setPacing(null); setLoading(false); } });
+  }, [source, reasoner, pace]);
 
-  useEffect(() => { if (tab === "gate") evaluate(); }, [evaluate, tab]);
+  useEffect(() => {
+    if (tab !== "gate") return;
+    if (skipRef.current) { skipRef.current = false; setLoading(false); return; }
+    evaluate();
+  }, [evaluate, tab]);
+
+  const useText = (text, name) => {
+    setSteps(null);
+    setSource({ type: "text", text, name });
+    setTab("gate");
+  };
+
+  const readFile = (file) => {
+    if (!file) return;
+    file.text().then((text) => useText(text, file.name));
+  };
 
   const onUpload = (evt) => {
-    const file = evt.target.files && evt.target.files[0];
-    if (!file) return;
-    setLoading(true);
-    setError(null);
-    file.text().then((text) =>
-      fetch(`/api/evaluate?reasoner=${reasoning ? "offline" : "none"}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: text,
-      })
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.error) { setError(d.error); setResult(null); }
-          else { setResult(d); setTab("gate"); }
-        })
-    ).catch((e) => setError(String(e))).finally(() => setLoading(false));
+    readFile(evt.target.files && evt.target.files[0]);
     evt.target.value = "";
   };
 
+  const onDrop = (evt) => {
+    evt.preventDefault();
+    setDragging(false);
+    readFile(evt.dataTransfer.files && evt.dataTransfer.files[0]);
+  };
+
+  const runTerraform = (named) => {
+    const mod = typeof named === "string" ? named : tfModule;
+    if (!mod) return;
+    setBusy("Running terraform init → plan → show → gate on examples/terraform/" + mod + " …");
+    setError(null);
+    setErrorSteps(null);
+    setTab("gate");
+    fetch(`/api/terraform/run?module=${encodeURIComponent(mod)}&reasoner=${reasoner}`, { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.error) { setError(d.error); setErrorSteps(d.pipeline || null); return; }
+        setResult(d);
+        setSteps(d.pipeline || null);
+        const key = "terraform/" + mod;
+        if (!(source.type === "catalog" && source.key === key)) skipRef.current = true;
+        setSource({ type: "catalog", key });
+        loadCatalog();
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => { setBusy(""); setLoading(false); });
+  };
+
+  const autoRun = useRef(false);
+  useEffect(() => {
+    const want = query.get("run");
+    if (want && !autoRun.current && (catalog.terraform_modules || []).includes(want)) {
+      autoRun.current = true;
+      setTfModule(want);
+      setTimeout(() => runTerraform(want), 0);
+    }
+  });
+
+  const groups = {};
+  (catalog.plans || []).forEach((p) => { (groups[p.group] = groups[p.group] || []).push(p); });
+  const selectValue = source.type === "catalog" ? source.key : "__custom";
+
   return (
-    <div className="shell">
+    <div
+      className={"shell" + (dragging ? " dragging" : "")}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
+      onDrop={onDrop}
+    >
       <div className="masthead">
         <h1>Agent SecOps</h1>
         <span className="sub">CAF/WAF compliance gate for Terraform in CI/CD</span>
@@ -702,10 +1400,10 @@ function App() {
         </button>
       </div>
       <p className="tagline">
-        This is the same engine the pipeline runs. It reads a <code>terraform plan</code>{" "}
-        JSON file, judges every proposed resource against Cloud Adoption Framework
-        governance and Well-Architected Framework pillars, and returns a verdict
-        &mdash; before any resource is created.
+        This is the same engine the pipeline runs. Give it a <code>terraform plan</code>{" "}
+        JSON file (choose one, upload, drop or paste it, or run a real{" "}
+        <code>terraform plan</code> below) and it judges every proposed resource against
+        CAF governance and Well-Architected pillars &mdash; before anything is created.
       </p>
 
       <div className="controls">
@@ -713,11 +1411,18 @@ function App() {
           <label htmlFor="plan-select">Plan</label>
           <select
             id="plan-select"
-            value={plan}
-            onChange={(e) => { setPlan(e.target.value); setTab("gate"); }}
+            value={selectValue}
+            onChange={(e) => {
+              setSteps(null);
+              setSource({ type: "catalog", key: e.target.value });
+              setTab("gate");
+            }}
           >
-            {plans.map((p) => (
-              <option key={p.file} value={p.file}>{p.label}</option>
+            {source.type === "text" && <option value="__custom">{source.name} (supplied)</option>}
+            {Object.entries(groups).map(([g, items]) => (
+              <optgroup key={g} label={g}>
+                {items.map((p) => <option key={p.file} value={p.file}>{p.label}</option>)}
+              </optgroup>
             ))}
           </select>
         </div>
@@ -732,10 +1437,23 @@ function App() {
           <span className="switch-label">Reasoning layer</span>
         </label>
 
+        <label className="switch" title="Slows the on-screen reveal so each stage can be explained. It does not change the engine or its measured times.">
+          <input
+            type="checkbox"
+            checked={pace}
+            onChange={(e) => setPace(e.target.checked)}
+          />
+          <span className="track"><span className="thumb" /></span>
+          <span className="switch-label">Presentation pacing</span>
+        </label>
+
         <label className="file-btn">
-          Upload a plan.json
+          Upload plan.json
           <input type="file" accept=".json,application/json" onChange={onUpload} />
         </label>
+        <button className="file-btn" onClick={() => setPasteOpen(!pasteOpen)}>
+          {pasteOpen ? "Close paste box" : "Paste JSON"}
+        </button>
 
         <div className="tabs" role="tablist">
           {[["gate", "Gate"], ["benchmark", "Benchmark"], ["rules", "Rules"]].map(
@@ -754,21 +1472,66 @@ function App() {
         </div>
       </div>
 
+      {pasteOpen && (
+        <div className="panel paste-box">
+          <textarea
+            placeholder="Paste the output of: terraform show -json tf.plan"
+            value={pasted}
+            onChange={(e) => setPasted(e.target.value)}
+            rows={8}
+          />
+          <button
+            className="primary"
+            disabled={!pasted.trim()}
+            onClick={() => { useText(pasted, "pasted plan"); setPasteOpen(false); }}
+          >
+            Evaluate pasted plan
+          </button>
+        </div>
+      )}
+
+      <div className="tf-runner">
+        <strong>Run the real pipeline</strong>
+        {catalog.terraform_available && (catalog.terraform_modules || []).length ? (
+          <React.Fragment>
+            <select value={tfModule} onChange={(e) => setTfModule(e.target.value)}>
+              {(catalog.terraform_modules || []).map((m) => (
+                <option key={m} value={m}>examples/terraform/{m}</option>
+              ))}
+            </select>
+            <button className="primary" disabled={!!busy} onClick={() => runTerraform()}>
+              {busy ? "Running…" : "terraform plan → gate"}
+            </button>
+            <span className="hint">
+              Plan-only, never applies. First run downloads the provider (about a minute).
+            </span>
+          </React.Fragment>
+        ) : (
+          <span className="hint">
+            Terraform was not found on PATH, so only pre-generated plans are available.
+          </span>
+        )}
+      </div>
+      {busy && <div className="spinner">{busy}</div>}
+
       {error && (
         <div className="error-box">
           <strong>Could not evaluate that plan.</strong>
           <div style={{ marginTop: 4 }}>{error}</div>
         </div>
       )}
+      {errorSteps && <PipelineSteps steps={errorSteps} />}
 
-      {tab === "gate" && <GateTab result={result} loading={loading} tooltip={tooltip} />}
+      {tab === "gate" && (
+        <GateTab result={result} loading={loading} tooltip={tooltip} steps={steps} pacing={pacing} />
+      )}
       {tab === "benchmark" && <BenchmarkTab tooltip={tooltip} />}
       {tab === "rules" && <RulesTab />}
 
       <p className="footnote">
-        Agent SecOps &middot; Project 19727UG01 &middot; The dashboard is a
-        presentation layer; in the real pipeline the gate is a CLI whose exit
-        code decides whether <code>terraform apply</code> runs.
+        Agent SecOps &middot; Project 19727UG01 &middot; In the real pipeline the gate is a
+        CLI whose exit code decides whether <code>terraform apply</code> runs; this
+        dashboard drives the same engine.
       </p>
 
       {tooltip.node}

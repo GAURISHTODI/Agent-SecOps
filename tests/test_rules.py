@@ -214,3 +214,43 @@ def test_rule_ids_are_unique():
 def test_both_frameworks_are_covered():
     frameworks = {r.pillar.framework for r in all_rules()}
     assert frameworks == {"CAF", "WAF"}
+
+
+# --- knowledge-accuracy regressions --------------------------------------
+
+def test_region_lists_are_per_cloud():
+    """An approved AWS/GCP region must not be flagged for not being an Azure name."""
+    assert fire("CAF-LZ-001", resource("aws_s3_bucket", region="us-east-1")) is None
+    assert fire("CAF-LZ-001", resource("aws_s3_bucket", region="sa-east-1")) is not None
+    assert fire("CAF-LZ-001", resource("google_storage_bucket", location="ASIA-SOUTH1")) is None
+    assert fire("CAF-LZ-001",
+                resource("google_storage_bucket", location="southamerica-east1")) is not None
+    # An Azure region name is not approved for an AWS resource.
+    assert fire("CAF-LZ-001", resource("aws_s3_bucket", region="centralindia")) is not None
+
+
+def test_iam_policy_is_parsed_not_substring_matched():
+    import json
+
+    scoped = json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*"}]})
+    assert fire("CAF-IAM-001", resource("aws_iam_role_policy", policy=scoped)) is None
+    admin = json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Allow", "Action": ["*"], "Resource": "*"}]})
+    assert fire("CAF-IAM-001", resource("aws_iam_role_policy", policy=admin)) is not None
+    deny = json.dumps({"Version": "2012-10-17", "Statement": [
+        {"Effect": "Deny", "Action": "*", "Resource": "*"}]})
+    assert fire("CAF-IAM-001", resource("aws_iam_role_policy", policy=deny)) is None
+
+
+def test_contributor_only_flagged_at_broad_scope():
+    """The project's own CI identity is Contributor on a resource group."""
+    rg = resource("azurerm_role_assignment", role_definition_name="Contributor",
+                  scope="/subscriptions/abc/resourceGroups/rg")
+    assert fire("CAF-IAM-001", rg) is None
+    sub = resource("azurerm_role_assignment", role_definition_name="Contributor",
+                   scope="/subscriptions/abc")
+    assert fire("CAF-IAM-001", sub) is not None
+    owner_rg = resource("azurerm_role_assignment", role_definition_name="Owner",
+                        scope="/subscriptions/abc/resourceGroups/rg")
+    assert fire("CAF-IAM-001", owner_rg) is not None

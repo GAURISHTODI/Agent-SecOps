@@ -1,0 +1,58 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "azurerm_storage_account.gaurish_s_resourceA",
+      "type": "azurerm_storage_account",
+      "name": "gaurish_s_resourceA",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "gaurishdata01",
+          "location": "centralindia",
+          "account_tier": "Standard",
+          "account_replication_type": "LRS",
+          "https_traffic_only_enabled": true,
+          "min_tls_version": "TLS1_0",
+          "allow_nested_items_to_be_public": true,
+          "shared_access_key_enabled": true,
+          "public_network_access_enabled": true,
+          "tags": {"environment": "prod", "owner": "gaurish", "costcenter": "CC-1042"}
+        }
+      }
+    },
+    {
+      "address": "aws_s3_bucket.akshat_s_resourceB",
+      "type": "aws_s3_bucket",
+      "name": "akshat_s_resourceB",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "bucket": "akshat-reports",
+          "region": "sa-east-1",
+          "acl": "public-read",
+          "versioning_enabled": false,
+          "tags": {"environment": "prod"}
+        }
+      }
+    },
+    {
+      "address": "google_compute_firewall.bhumika_s_resourceC",
+      "type": "google_compute_firewall",
+      "name": "bhumika_s_resourceC",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "bhumika-allow-ssh",
+          "direction": "INGRESS",
+          "source_ranges": ["0.0.0.0/0"],
+          "allow": [{"protocol": "tcp", "ports": ["22"]}]
+        }
+      }
+    }
+  ]
+}
