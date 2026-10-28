@@ -38,7 +38,11 @@
           "allow_nested_items_to_be_public": true,
           "shared_access_key_enabled": true,
           "public_network_access_enabled": true,
-          "versioning_enabled": false,
+          "blob_properties": [
+            {
+              "versioning_enabled": false
+            }
+          ],
           "network_rules": [
             {
               "default_action": "Allow",
@@ -66,12 +70,36 @@
           "location": "brazilsouth",
           "version": "12.0",
           "administrator_login": "sqladmin",
-          "administrator_login_password": "P@ssw0rd123!",  
+          "administrator_login_password": "P@ssw0rd123!",
           "minimum_tls_version": "1.0",
           "public_network_access_enabled": true,
-          "backup_retention_days": 1,
           "tags": {
             "environment": "prod"
+          }
+        }
+      }
+    },
+    {
+      "address": "azurerm_mssql_database.db",
+      "mode": "managed",
+      "type": "azurerm_mssql_database",
+      "name": "db",
+      "provider_name": "registry.terraform.io/hashicorp/azurerm",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "demo-sql-db",
+          "sku_name": "Basic",
+          "short_term_retention_policy": [
+            {
+              "retention_days": 1
+            }
+          ],
+          "tags": {
+            "environment": "prod",
+            "owner": "team-a",
+            "costcenter": "CC-1042"
           }
         }
       }

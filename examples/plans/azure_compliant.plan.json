@@ -23,7 +23,7 @@
       }
     },
     {
-      "address": "azurerm_log_analytics_workspace.l aw",
+      "address": "azurerm_log_analytics_workspace.law",
       "mode": "managed",
       "type": "azurerm_log_analytics_workspace",
       "name": "law",
@@ -66,7 +66,11 @@
           "shared_access_key_enabled": false,
           "public_network_access_enabled": false,
           "infrastructure_encryption_enabled": true,
-          "versioning_enabled": true,
+          "blob_properties": [
+            {
+              "versioning_enabled": true
+            }
+          ],
           "customer_managed_key": [
             {
               "key_vault_key_id": "/subscriptions/x/resourceGroups/secops-prod-cin-rg/providers/Microsoft.KeyVault/vaults/secops-prod-cin-kv/keys/data"

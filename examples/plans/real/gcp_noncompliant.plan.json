@@ -1,0 +1,711 @@
+{
+ "applyable": true,
+ "complete": true,
+ "configuration": {
+  "provider_config": {
+   "google": {
+    "expressions": {
+     "access_token": {
+      "constant_value": "offline"
+     },
+     "project": {
+      "constant_value": "demo-project"
+     },
+     "region": {
+      "constant_value": "southamerica-east1"
+     }
+    },
+    "full_name": "registry.terraform.io/hashicorp/google",
+    "name": "google",
+    "version_constraint": "~> 5.0"
+   }
+  },
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_compute_firewall.allow_ssh",
+     "expressions": {
+      "allow": [
+       {
+        "ports": {
+         "constant_value": [
+          "22",
+          "3389"
+         ]
+        },
+        "protocol": {
+         "constant_value": "tcp"
+        }
+       }
+      ],
+      "direction": {
+       "constant_value": "INGRESS"
+      },
+      "name": {
+       "constant_value": "allow-ssh"
+      },
+      "network": {
+       "constant_value": "default"
+      },
+      "source_ranges": {
+       "constant_value": [
+        "0.0.0.0/0"
+       ]
+      }
+     },
+     "mode": "managed",
+     "name": "allow_ssh",
+     "provider_config_key": "google",
+     "schema_version": 1,
+     "type": "google_compute_firewall"
+    },
+    {
+     "address": "google_project_iam_member.owner",
+     "expressions": {
+      "member": {
+       "constant_value": "serviceAccount:app@demo-project.iam.gserviceaccount.com"
+      },
+      "project": {
+       "constant_value": "demo-project"
+      },
+      "role": {
+       "constant_value": "roles/owner"
+      }
+     },
+     "mode": "managed",
+     "name": "owner",
+     "provider_config_key": "google",
+     "schema_version": 0,
+     "type": "google_project_iam_member"
+    },
+    {
+     "address": "google_sql_database_instance.main",
+     "expressions": {
+      "database_version": {
+       "constant_value": "POSTGRES_15"
+      },
+      "deletion_protection": {
+       "constant_value": false
+      },
+      "name": {
+       "constant_value": "demo-sql"
+      },
+      "region": {
+       "constant_value": "southamerica-east1"
+      },
+      "root_password": {
+       "constant_value": "changeme123"
+      },
+      "settings": [
+       {
+        "backup_configuration": [
+         {
+          "enabled": {
+           "constant_value": false
+          }
+         }
+        ],
+        "tier": {
+         "constant_value": "db-f1-micro"
+        },
+        "user_labels": {
+         "constant_value": {
+          "environment": "dev"
+         }
+        }
+       }
+      ]
+     },
+     "mode": "managed",
+     "name": "main",
+     "provider_config_key": "google",
+     "schema_version": 0,
+     "type": "google_sql_database_instance"
+    },
+    {
+     "address": "google_storage_bucket.data",
+     "expressions": {
+      "labels": {
+       "constant_value": {
+        "environment": "prod"
+       }
+      },
+      "location": {
+       "constant_value": "SOUTHAMERICA-EAST1"
+      },
+      "name": {
+       "constant_value": "demo-data-bucket"
+      },
+      "storage_class": {
+       "constant_value": "STANDARD"
+      },
+      "versioning": [
+       {
+        "enabled": {
+         "constant_value": false
+        }
+       }
+      ]
+     },
+     "mode": "managed",
+     "name": "data",
+     "provider_config_key": "google",
+     "schema_version": 2,
+     "type": "google_storage_bucket"
+    }
+   ]
+  }
+ },
+ "errored": false,
+ "format_version": "1.2",
+ "planned_values": {
+  "root_module": {
+   "resources": [
+    {
+     "address": "google_compute_firewall.allow_ssh",
+     "mode": "managed",
+     "name": "allow_ssh",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 1,
+     "sensitive_values": {
+      "allow": [
+       {
+        "ports": [
+         false,
+         false
+        ]
+       }
+      ],
+      "deny": [],
+      "destination_ranges": [],
+      "log_config": [],
+      "source_ranges": [
+       false
+      ]
+     },
+     "type": "google_compute_firewall",
+     "values": {
+      "allow": [
+       {
+        "ports": [
+         "22",
+         "3389"
+        ],
+        "protocol": "tcp"
+       }
+      ],
+      "deny": [],
+      "description": null,
+      "direction": "INGRESS",
+      "disabled": null,
+      "log_config": [],
+      "name": "allow-ssh",
+      "network": "default",
+      "priority": 1000,
+      "project": "demo-project",
+      "source_ranges": [
+       "0.0.0.0/0"
+      ],
+      "source_service_accounts": null,
+      "source_tags": null,
+      "target_service_accounts": null,
+      "target_tags": null,
+      "timeouts": null
+     }
+    },
+    {
+     "address": "google_project_iam_member.owner",
+     "mode": "managed",
+     "name": "owner",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 0,
+     "sensitive_values": {
+      "condition": []
+     },
+     "type": "google_project_iam_member",
+     "values": {
+      "condition": [],
+      "member": "serviceAccount:app@demo-project.iam.gserviceaccount.com",
+      "project": "demo-project",
+      "role": "roles/owner"
+     }
+    },
+    {
+     "address": "google_sql_database_instance.main",
+     "mode": "managed",
+     "name": "main",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 0,
+     "sensitive_values": {
+      "available_maintenance_versions": [],
+      "clone": [],
+      "ip_address": [],
+      "replica_configuration": [],
+      "restore_backup_context": [],
+      "root_password": true,
+      "server_ca_cert": true,
+      "settings": [
+       {
+        "active_directory_config": [],
+        "advanced_machine_features": [],
+        "backup_configuration": [
+         {
+          "backup_retention_settings": []
+         }
+        ],
+        "data_cache_config": [],
+        "database_flags": [],
+        "deny_maintenance_period": [],
+        "insights_config": [],
+        "ip_configuration": [],
+        "location_preference": [],
+        "maintenance_window": [],
+        "password_validation_policy": [],
+        "sql_server_audit_config": [],
+        "user_labels": {}
+       }
+      ]
+     },
+     "type": "google_sql_database_instance",
+     "values": {
+      "clone": [],
+      "database_version": "POSTGRES_15",
+      "deletion_protection": false,
+      "name": "demo-sql",
+      "project": "demo-project",
+      "region": "southamerica-east1",
+      "restore_backup_context": [],
+      "root_password": "changeme123",
+      "settings": [
+       {
+        "activation_policy": "ALWAYS",
+        "active_directory_config": [],
+        "advanced_machine_features": [],
+        "availability_type": "ZONAL",
+        "backup_configuration": [
+         {
+          "binary_log_enabled": null,
+          "enabled": false,
+          "location": null,
+          "point_in_time_recovery_enabled": null
+         }
+        ],
+        "collation": null,
+        "data_cache_config": [],
+        "database_flags": [],
+        "deletion_protection_enabled": null,
+        "deny_maintenance_period": [],
+        "disk_autoresize": true,
+        "disk_autoresize_limit": 0,
+        "disk_type": "PD_SSD",
+        "edition": "ENTERPRISE",
+        "enable_dataplex_integration": null,
+        "enable_google_ml_integration": null,
+        "maintenance_window": [],
+        "password_validation_policy": [],
+        "pricing_plan": "PER_USE",
+        "sql_server_audit_config": [],
+        "tier": "db-f1-micro",
+        "time_zone": null,
+        "user_labels": {
+         "environment": "dev"
+        }
+       }
+      ],
+      "timeouts": null
+     }
+    },
+    {
+     "address": "google_storage_bucket.data",
+     "mode": "managed",
+     "name": "data",
+     "provider_name": "registry.terraform.io/hashicorp/google",
+     "schema_version": 2,
+     "sensitive_values": {
+      "autoclass": [],
+      "cors": [],
+      "custom_placement_config": [],
+      "effective_labels": {},
+      "encryption": [],
+      "labels": {},
+      "lifecycle_rule": [],
+      "logging": [],
+      "retention_policy": [],
+      "soft_delete_policy": [],
+      "terraform_labels": {},
+      "versioning": [
+       {}
+      ],
+      "website": []
+     },
+     "type": "google_storage_bucket",
+     "values": {
+      "autoclass": [],
+      "cors": [],
+      "custom_placement_config": [],
+      "default_event_based_hold": null,
+      "effective_labels": {
+       "environment": "prod"
+      },
+      "enable_object_retention": null,
+      "encryption": [],
+      "force_destroy": false,
+      "labels": {
+       "environment": "prod"
+      },
+      "lifecycle_rule": [],
+      "location": "SOUTHAMERICA-EAST1",
+      "logging": [],
+      "name": "demo-data-bucket",
+      "requester_pays": null,
+      "retention_policy": [],
+      "storage_class": "STANDARD",
+      "terraform_labels": {
+       "environment": "prod"
+      },
+      "timeouts": null,
+      "versioning": [
+       {
+        "enabled": false
+       }
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "resource_changes": [
+  {
+   "address": "google_compute_firewall.allow_ssh",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "allow": [
+      {
+       "ports": [
+        "22",
+        "3389"
+       ],
+       "protocol": "tcp"
+      }
+     ],
+     "deny": [],
+     "description": null,
+     "direction": "INGRESS",
+     "disabled": null,
+     "log_config": [],
+     "name": "allow-ssh",
+     "network": "default",
+     "priority": 1000,
+     "project": "demo-project",
+     "source_ranges": [
+      "0.0.0.0/0"
+     ],
+     "source_service_accounts": null,
+     "source_tags": null,
+     "target_service_accounts": null,
+     "target_tags": null,
+     "timeouts": null
+    },
+    "after_sensitive": {
+     "allow": [
+      {
+       "ports": [
+        false,
+        false
+       ]
+      }
+     ],
+     "deny": [],
+     "destination_ranges": [],
+     "log_config": [],
+     "source_ranges": [
+      false
+     ]
+    },
+    "after_unknown": {
+     "allow": [
+      {
+       "ports": [
+        false,
+        false
+       ]
+      }
+     ],
+     "creation_timestamp": true,
+     "deny": [],
+     "destination_ranges": true,
+     "enable_logging": true,
+     "id": true,
+     "log_config": [],
+     "self_link": true,
+     "source_ranges": [
+      false
+     ]
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "allow_ssh",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_compute_firewall"
+  },
+  {
+   "address": "google_project_iam_member.owner",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "condition": [],
+     "member": "serviceAccount:app@demo-project.iam.gserviceaccount.com",
+     "project": "demo-project",
+     "role": "roles/owner"
+    },
+    "after_sensitive": {
+     "condition": []
+    },
+    "after_unknown": {
+     "condition": [],
+     "etag": true,
+     "id": true
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "owner",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_project_iam_member"
+  },
+  {
+   "address": "google_sql_database_instance.main",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "clone": [],
+     "database_version": "POSTGRES_15",
+     "deletion_protection": false,
+     "name": "demo-sql",
+     "project": "demo-project",
+     "region": "southamerica-east1",
+     "restore_backup_context": [],
+     "root_password": "changeme123",
+     "settings": [
+      {
+       "activation_policy": "ALWAYS",
+       "active_directory_config": [],
+       "advanced_machine_features": [],
+       "availability_type": "ZONAL",
+       "backup_configuration": [
+        {
+         "binary_log_enabled": null,
+         "enabled": false,
+         "location": null,
+         "point_in_time_recovery_enabled": null
+        }
+       ],
+       "collation": null,
+       "data_cache_config": [],
+       "database_flags": [],
+       "deletion_protection_enabled": null,
+       "deny_maintenance_period": [],
+       "disk_autoresize": true,
+       "disk_autoresize_limit": 0,
+       "disk_type": "PD_SSD",
+       "edition": "ENTERPRISE",
+       "enable_dataplex_integration": null,
+       "enable_google_ml_integration": null,
+       "maintenance_window": [],
+       "password_validation_policy": [],
+       "pricing_plan": "PER_USE",
+       "sql_server_audit_config": [],
+       "tier": "db-f1-micro",
+       "time_zone": null,
+       "user_labels": {
+        "environment": "dev"
+       }
+      }
+     ],
+     "timeouts": null
+    },
+    "after_sensitive": {
+     "available_maintenance_versions": [],
+     "clone": [],
+     "ip_address": [],
+     "replica_configuration": [],
+     "restore_backup_context": [],
+     "root_password": true,
+     "server_ca_cert": true,
+     "settings": [
+      {
+       "active_directory_config": [],
+       "advanced_machine_features": [],
+       "backup_configuration": [
+        {
+         "backup_retention_settings": []
+        }
+       ],
+       "data_cache_config": [],
+       "database_flags": [],
+       "deny_maintenance_period": [],
+       "insights_config": [],
+       "ip_configuration": [],
+       "location_preference": [],
+       "maintenance_window": [],
+       "password_validation_policy": [],
+       "sql_server_audit_config": [],
+       "user_labels": {}
+      }
+     ]
+    },
+    "after_unknown": {
+     "available_maintenance_versions": true,
+     "clone": [],
+     "connection_name": true,
+     "dns_name": true,
+     "encryption_key_name": true,
+     "first_ip_address": true,
+     "id": true,
+     "instance_type": true,
+     "ip_address": true,
+     "maintenance_version": true,
+     "master_instance_name": true,
+     "private_ip_address": true,
+     "psc_service_attachment_link": true,
+     "public_ip_address": true,
+     "replica_configuration": true,
+     "restore_backup_context": [],
+     "self_link": true,
+     "server_ca_cert": true,
+     "service_account_email_address": true,
+     "settings": [
+      {
+       "active_directory_config": [],
+       "advanced_machine_features": [],
+       "backup_configuration": [
+        {
+         "backup_retention_settings": true,
+         "start_time": true,
+         "transaction_log_retention_days": true
+        }
+       ],
+       "connector_enforcement": true,
+       "data_cache_config": [],
+       "database_flags": [],
+       "deny_maintenance_period": [],
+       "disk_size": true,
+       "insights_config": true,
+       "ip_configuration": true,
+       "location_preference": true,
+       "maintenance_window": [],
+       "password_validation_policy": [],
+       "sql_server_audit_config": [],
+       "user_labels": {},
+       "version": true
+      }
+     ]
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "main",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_sql_database_instance"
+  },
+  {
+   "address": "google_storage_bucket.data",
+   "change": {
+    "actions": [
+     "create"
+    ],
+    "after": {
+     "autoclass": [],
+     "cors": [],
+     "custom_placement_config": [],
+     "default_event_based_hold": null,
+     "effective_labels": {
+      "environment": "prod"
+     },
+     "enable_object_retention": null,
+     "encryption": [],
+     "force_destroy": false,
+     "labels": {
+      "environment": "prod"
+     },
+     "lifecycle_rule": [],
+     "location": "SOUTHAMERICA-EAST1",
+     "logging": [],
+     "name": "demo-data-bucket",
+     "requester_pays": null,
+     "retention_policy": [],
+     "storage_class": "STANDARD",
+     "terraform_labels": {
+      "environment": "prod"
+     },
+     "timeouts": null,
+     "versioning": [
+      {
+       "enabled": false
+      }
+     ]
+    },
+    "after_sensitive": {
+     "autoclass": [],
+     "cors": [],
+     "custom_placement_config": [],
+     "effective_labels": {},
+     "encryption": [],
+     "labels": {},
+     "lifecycle_rule": [],
+     "logging": [],
+     "retention_policy": [],
+     "soft_delete_policy": [],
+     "terraform_labels": {},
+     "versioning": [
+      {}
+     ],
+     "website": []
+    },
+    "after_unknown": {
+     "autoclass": [],
+     "cors": [],
+     "custom_placement_config": [],
+     "effective_labels": {},
+     "encryption": [],
+     "id": true,
+     "labels": {},
+     "lifecycle_rule": [],
+     "logging": [],
+     "project": true,
+     "project_number": true,
+     "public_access_prevention": true,
+     "retention_policy": [],
+     "rpo": true,
+     "self_link": true,
+     "soft_delete_policy": true,
+     "terraform_labels": {},
+     "uniform_bucket_level_access": true,
+     "url": true,
+     "versioning": [
+      {}
+     ],
+     "website": true
+    },
+    "before": null,
+    "before_sensitive": false
+   },
+   "mode": "managed",
+   "name": "data",
+   "provider_name": "registry.terraform.io/hashicorp/google",
+   "type": "google_storage_bucket"
+  }
+ ],
+ "terraform_version": "1.15.8"
+}

@@ -86,10 +86,10 @@ terraform show -json tf.plan  ->  plan.json
 │       |                                        │
 │       +-> Layer 1: deterministic CAF/WAF rules │
 │       |            (22 rules, confidence 1.0)  │
-│       +-> Layer 2: framework reasoning         │
-│       |            (what no rule encodes)      │
-│       +-> Layer 3: org policy                  │
-│                    thresholds + waivers        │
+│       +-> Layer 2a: organisational customized  │
+│       |             policies (+ 2b graph)      │
+│       +-> Layer 3: thresholds & waivers        │
+│                    (then the verdict)          │
 │                          |                     │
 │                     verdict + report           │
 └──────────────────────────┬──────────────────────┘
@@ -171,7 +171,7 @@ scripts/
   demo.sh                    local demo walkthrough
   build_report.py, build_ppt.py, build_figures.py   document generators (new)
 docs/                       all documentation (see §9)
-tests/                       63 tests
+tests/                       146 tests
 ```
 
 ---
@@ -179,7 +179,7 @@ tests/                       63 tests
 ## 5. What is actually built and verified (not aspirational)
 
 - **63 automated tests, all passing.** Parser (provider detection, canonical-kind mapping across 3 clouds, the firewall/database misclassification regression, replace-as-create), rules (every rule tested both directions — fires on violation, silent on compliant), engine (verdicts, waiver expiry, threshold changes, both layers contributing, no duplication between layers, all 3 report formats, CLI exit codes, malformed-plan resilience).
-- **Benchmark: 42 hand-labelled seeded violations across Azure/AWS/GCP.** Rules alone: 37/42 (88.1%). Rules + reasoning: 42/42 (100%). **5 violations recoverable only by reasoning** — the quantified research claim. **0 false positives** on the compliant module. Median latency < 10 ms. Reproduce: `python scripts/benchmark.py`.
+- **Benchmark: 42 hand-labelled seeded violations across Azure/AWS/GCP.** Rules alone: 33/42 (78.6%). Rules + reasoning: 42/42 (100%). **9 violations recoverable only by reasoning** — the quantified research claim. **0 verdict-affecting false positives** on the compliant module. Identical on hand-written fixtures and on real `terraform show -json` output (`examples/plans/real/`); each violation must be caught by the specific check labelled for it (2026-10-28 re-measurement — the earlier 37/42 counted any finding with the same pillar on the same resource). Median latency < 10 ms. Reproduce: `python scripts/benchmark.py`.
 - **Local dashboard** (`python -m dashboard.server`) — 3 tabs (Gate, Benchmark, Rules), reasoning-layer on/off toggle, plan upload, all driven by the same engine as the CLI.
 - **GitHub repository live and pushed:** [github.com/GAURISHTODI/Agent-SecOps](https://github.com/GAURISHTODI/Agent-SecOps), 2 commits, scanned clean for secrets before every push.
 - **Real Azure deployment**, not just fixtures (see §6).

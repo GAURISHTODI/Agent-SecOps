@@ -112,6 +112,10 @@ class Resource:
     after: Dict[str, Any] = field(default_factory=dict)
     before: Dict[str, Any] = field(default_factory=dict)
     module: str = "root"
+    # Attributes whose configuration expression references something else
+    # (a variable, data source or resource) rather than a literal. Taken from
+    # the plan's `configuration` block; empty for hand-written fixtures.
+    referenced_attrs: List[str] = field(default_factory=list)
 
     # ---- helpers used heavily by rules -------------------------------
     def get(self, path: str, default: Any = None) -> Any:
@@ -135,9 +139,16 @@ class Resource:
     @property
     def tags(self) -> Dict[str, str]:
         raw = self.after.get("tags") or self.after.get("labels") or {}
+        if not raw:
+            # Cloud SQL keeps its labels inside the settings block.
+            settings = self.get("settings")
+            if isinstance(settings, dict):
+                raw = settings.get("user_labels") or {}
         if isinstance(raw, list):  # aws-style [{key,value}] tag sets
             return {t.get("key"): t.get("value") for t in raw if isinstance(t, dict)}
-        return {str(k): str(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): str(v) for k, v in raw.items() if v is not None}
 
     @property
     def is_mutating(self) -> bool:

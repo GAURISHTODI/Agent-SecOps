@@ -57,7 +57,11 @@ function useTheme() {
     else document.documentElement.setAttribute("data-theme", theme);
     try { localStorage.setItem("secops-theme", theme); } catch (e) { /* private mode */ }
   }, [theme]);
-  return [theme, setTheme];
+  // "system" follows the OS, so resolve it to what is actually on screen;
+  // otherwise the toggle would offer "Dark mode" on a page that is already dark.
+  const effective = theme !== "system" ? theme
+    : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  return [effective, setTheme];
 }
 
 /* Shared tooltip: an HTML chart is interactive by default, so every chart
@@ -385,21 +389,41 @@ function FindingsPanel({ result }) {
 function BenchmarkTab({ tooltip }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const [running, setRunning] = useState(false);
 
-  useEffect(() => {
+  const run = () => {
+    setRunning(true);
+    setErr(null);
     fetch("/api/benchmark")
       .then((r) => r.json())
       .then((d) => (d.error ? setErr(d.error) : setData(d)))
-      .catch((e) => setErr(String(e)));
-  }, []);
+      .catch((e) => setErr(String(e)))
+      .finally(() => setRunning(false));
+  };
 
-  if (err) return <div className="error-box"><strong>Benchmark failed.</strong> {err}</div>;
-  if (!data) return <div className="spinner">Running the benchmark&hellip;</div>;
+  const runBar = (
+    <div className="tf-runner">
+      <strong>Detection benchmark</strong>
+      <button className="primary" disabled={running} onClick={run}>
+        {running ? "Running…" : data ? "Run again" : "Run benchmark"}
+      </button>
+      <span className="hint">
+        Scores all 42 seeded violations twice (rules only, then rules + reasoning)
+        on the hand-written fixtures and on real terraform plan output.
+      </span>
+    </div>
+  );
+
+  if (err) return <React.Fragment>{runBar}<div className="error-box"><strong>Benchmark failed.</strong> {err}</div></React.Fragment>;
+  if (running && !data) return <React.Fragment>{runBar}<div className="spinner">Running the benchmark&hellip;</div></React.Fragment>;
+  if (!data) return <React.Fragment>{runBar}<div className="empty">Press <strong>Run benchmark</strong> to measure detection. Nothing runs until you press it.</div></React.Fragment>;
 
   const t = data.totals;
+  const real = data.real && data.real.totals;
 
   return (
     <React.Fragment>
+      {runBar}
       <div className="tiles">
         <div className="tile">
           <div className="value">{t.seeded_violations}</div>
@@ -427,6 +451,24 @@ function BenchmarkTab({ tooltip }) {
           <div className="note">on the compliant module</div>
         </div>
       </div>
+
+      {real && (
+        <div className="panel" style={{ marginBottom: 14 }}>
+          <h2>Same benchmark on real terraform output</h2>
+          <p className="panel-sub">
+            Plans produced by <code>terraform plan</code> + <code>terraform show -json</code>{" "}
+            on the seeded modules (<code>examples/plans/real/</code>) &mdash; the exact
+            input the CI pipeline gives the gate.
+          </p>
+          <div style={{ fontSize: 14 }}>
+            Rules alone <strong>{real.detected_rules_only}/{real.seeded_violations}</strong>{" "}
+            &middot; with reasoning <strong>{real.detected_with_reasoning}/{real.seeded_violations}</strong>{" "}
+            &middot; recovered by reasoning <strong>+{real.reasoning_uplift}</strong>{" "}
+            &middot; verdict-affecting false positives <strong>{real.false_positives_on_clean_plan}</strong>{" "}
+            ({real.advisories_on_clean_plan} low-severity advisory)
+          </div>
+        </div>
+      )}
 
       <div className="panel" style={{ marginBottom: 14 }}>
         <h2>Detection per plan</h2>
@@ -493,6 +535,210 @@ function BenchmarkTab({ tooltip }) {
   );
 }
 
+/* --- how it works tab -------------------------------------------------- */
+
+const LAYERS = [
+  {
+    name: "Step 0 · Read the plan",
+    what: "Turns terraform show -json into a common list of resources.",
+    how: "Each provider type (azurerm_storage_account, aws_s3_bucket, google_storage_bucket) is mapped to one canonical kind (object storage), so a rule written once covers all three clouds. Only resources being created, updated or replaced are judged. The plan's configuration section also gives the links between resources (which database uses which firewall) and tells which values were typed literally versus read from a variable or Key Vault.",
+    file: "agent/plan_parser.py",
+  },
+  {
+    name: "Layer 1 · Deterministic CAF/WAF rules",
+    what: "22 fixed checks, each tied to one CAF or WAF pillar.",
+    how: "Every rule looks at one resource and answers yes or no: is TLS below 1.2, is port 22 open to 0.0.0.0/0, is a password typed in plain text, is the region outside the approved list, are the owner/environment/costcenter tags missing. A hit is a finding with confidence 1.0, the pillar it breaks, a plain-language reason and a Terraform fix.",
+    file: "agent/rules/caf.py, agent/rules/waf.py",
+  },
+  {
+    name: "Layer 2a · Organisational customized policies",
+    what: "12 checks for things CAF/WAF guidance warns about but no Layer-1 rule encodes.",
+    how: "For each resource the agent first looks up which pillars matter for that kind in the knowledge base (caf_waf_kb.yaml), then runs only the probes for those pillars: shared access keys still on, versioning off, a database firewall open to every IPv4 address, a VM allowing password login, no availability zone, a key vault using legacy access policies. It skips anything Layer 1 already reported. These are written by hand from the guidance; the optional LLM reasoner does the same job with a model, but it is off by default and has not been benchmarked.",
+    file: "agent/reasoner/offline.py, agent/knowledge/caf_waf_kb.yaml",
+  },
+  {
+    name: "Layer 2b · Dependency-graph risk",
+    what: "Finds dangerous combinations that live on two different resources.",
+    how: "An open firewall on its own, or a weak database on its own, is one finding each. A database with a plain-text password sitting behind a firewall open to the internet is worse than either. This layer walks the links between resources and reports only the extra risk the connection adds. The algorithm section below works through the numbers.",
+    file: "agent/reasoner/graph.py",
+  },
+  {
+    name: "Layer 3 · Thresholds & waivers",
+    what: "Turns findings into one decision the pipeline obeys.",
+    how: "policies/policy.yaml sets the thresholds: any active rule finding at high or above means BLOCK, medium means REMEDIATE, otherwise PASS. Reasoning findings are advisory: they can raise a warning but cannot block unless the policy is changed to trust them. Waivers accept a known risk for a named resource until an expiry date; once expired, the finding counts again.",
+    file: "agent/config.py, agent/engine.py",
+  },
+];
+
+function AboutTab() {
+  const [s, setS] = useState(null);
+  useEffect(() => {
+    fetch("/api/status").then((r) => r.json()).then(setS).catch(() => setS({}));
+  }, []);
+  const fx = (s && s.benchmark && s.benchmark.fixtures) || {};
+  const real = (s && s.benchmark && s.benchmark.real) || {};
+
+  return (
+    <React.Fragment>
+      <div className="panel" style={{ marginBottom: 14 }}>
+        <h2>Current standing</h2>
+        <p className="panel-sub">
+          Technology readiness level 4: a working prototype validated in a lab setting.
+          Figures below are read from the code and from the last recorded benchmark
+          {s && s.benchmark && s.benchmark.recorded_on ? " (" + s.benchmark.recorded_on + ")" : ""};
+          nothing is evaluated when this tab opens.
+        </p>
+        <div className="tiles">
+          <div className="tile">
+            <div className="value">{s ? s.rules : "…"}</div>
+            <div className="name">Deterministic rules</div>
+            <div className="note">{s ? s.caf_rules + " CAF + " + s.waf_rules + " WAF, " + s.pillars + " pillars" : ""}</div>
+          </div>
+          <div className="tile accent-2">
+            <div className="value">{s ? s.probes : "…"}</div>
+            <div className="name">Reasoning probes</div>
+            <div className="note">plus graph risk propagation</div>
+          </div>
+          <div className="tile">
+            <div className="value">3</div>
+            <div className="name">Clouds</div>
+            <div className="note">Azure, AWS, GCP</div>
+          </div>
+          <div className="tile accent-1">
+            <div className="value">{fx.detected_rules_only != null ? fx.detected_rules_only + "/" + fx.seeded_violations : "…"}</div>
+            <div className="name">Rules alone</div>
+            <div className="note">seeded violations detected</div>
+          </div>
+          <div className="tile accent-2">
+            <div className="value">{fx.detected_with_reasoning != null ? fx.detected_with_reasoning + "/" + fx.seeded_violations : "…"}</div>
+            <div className="name">With reasoning</div>
+            <div className="note">{real.detected_with_reasoning != null ? "same on real terraform plans" : ""}</div>
+          </div>
+          <div className="tile">
+            <div className="value">{fx.false_positives_on_clean_plan != null ? fx.false_positives_on_clean_plan : "…"}</div>
+            <div className="name">False positives</div>
+            <div className="note">verdict-affecting, compliant module</div>
+          </div>
+        </div>
+        <div className="grid-2" style={{ marginTop: 14 }}>
+          <div>
+            <strong>Working today</strong>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+              <li>GitHub Actions gate between <code>terraform plan</code> and <code>terraform apply</code>; the exit code decides.</li>
+              <li>Real <code>terraform plan</code> output from Azure, AWS and GCP modules goes through the same engine.</li>
+              <li>Compliant Azure workload deployed through the pipeline; seeded modules are blocked on every pull request.</li>
+              <li>Reports as PR comment (Markdown), JSON, SARIF (GitHub Security tab) and PDF.</li>
+              <li>Automated tests for parser, rules, engine and real plans.</li>
+            </ul>
+          </div>
+          <div>
+            <strong>Limits, stated plainly</strong>
+            <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+              <li>The seeded violations were written by the same team that wrote the checks, so 100% is an upper bound, not field accuracy.</li>
+              <li>The reasoning probes are hand-written from framework guidance; no model is trained.</li>
+              <li>The LLM reasoner is built and guard-railed but off by default and not benchmarked.</li>
+              <li>Next step: an independent test set such as public vulnerable-Terraform repositories.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 14 }}>
+        <h2>The layers and how each one works</h2>
+        <p className="panel-sub">
+          A plan goes through these in order. Each layer adds findings; only the last
+          one decides.
+        </p>
+        {LAYERS.map((l) => (
+          <div key={l.name} style={{ padding: "10px 0", borderTop: "1px solid var(--border)" }}>
+            <div style={{ fontWeight: 600 }}>{l.name}</div>
+            <div style={{ color: "var(--text-secondary)", margin: "2px 0 4px" }}>{l.what}</div>
+            <div style={{ fontSize: 13.5, lineHeight: 1.55 }}>{l.how}</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}><code>{l.file}</code></div>
+          </div>
+        ))}
+      </div>
+
+      <div className="panel" style={{ marginBottom: 14 }}>
+        <h2>Where seeded data is used</h2>
+        <p className="panel-sub">
+          "Seeded" means misconfigurations placed on purpose, each labelled with the
+          check that must catch it. It is test data only: nothing is trained on it.
+        </p>
+        <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.6 }}>
+          <li><strong>Seeded Terraform modules</strong> &mdash; <code>examples/terraform/</code>{" "}
+            ({s ? s.seeded_modules.join(", ") : "…"}). Real Terraform with deliberate mistakes. CI runs{" "}
+            <code>terraform plan</code> on them on every pull request and fails the build if the gate does not
+            BLOCK them. Plan-only: they are never applied, so they cost nothing. The{" "}
+            <em>Run the real pipeline</em> bar on the Gate tab runs the same thing locally.</li>
+          <li><strong>Hand-written plan fixtures</strong> &mdash; <code>examples/plans/</code>{" "}
+            ({s ? s.fixtures.length : "…"} files). Plan JSON mirroring the modules; used in the
+            Plan dropdown, by the unit tests and by the benchmark.</li>
+          <li><strong>Real plan output</strong> &mdash; <code>examples/plans/real/</code>{" "}
+            ({s ? s.real_plans.length : "…"} files). Saved <code>terraform show -json</code> output of the same
+            modules; the benchmark scores these too, so the numbers hold on genuine Terraform output.</li>
+          <li><strong>Ground truth</strong> &mdash; <code>scripts/benchmark.py</code>. The list of 42 labelled
+            violations (28 Azure, 8 AWS, 6 GCP). The Benchmark tab runs every plan twice, rules only and with
+            reasoning, and counts a violation only when its labelled check fires on its resource.</li>
+          <li><strong>Compliant baseline</strong> &mdash; <code>infra/demo/</code> and{" "}
+            <code>azure_compliant.plan.json</code>. A correct workload that must PASS; this is how false
+            positives are measured.</li>
+        </ul>
+      </div>
+
+      <div className="panel">
+        <h2>The algorithm, step by step</h2>
+        <p className="panel-sub">What happens between pressing Run gate and seeing the verdict.</p>
+        <ol style={{ margin: 0, paddingLeft: 22, lineHeight: 1.6 }}>
+          <li><strong>Read.</strong> Load the plan file and list every resource Terraform is about to create
+            or change. Give each one a cloud-neutral kind, and fold settings that Terraform stores on helper
+            resources (an S3 bucket's ACL or versioning) back onto the resource they belong to.</li>
+          <li><strong>Connect.</strong> From the plan's references, build a map of which resource points to
+            which. Shared containers such as resource groups are left out, otherwise everything would look
+            connected to everything.</li>
+          <li><strong>Check rules (Layer 1).</strong> Run each of the 22 rules against each resource. A rule
+            either stays silent or produces a finding with its pillar, severity, reason and fix.</li>
+          <li><strong>Organisational customized policies (Layer 2a).</strong> For each resource, look up the pillars that matter for
+            its kind and run the matching probes, skipping anything already reported.</li>
+          <li><strong>Apply waivers.</strong> Mark findings covered by an unexpired waiver, so an accepted risk
+            is not counted again in the next step.</li>
+          <li><strong>Propagate risk (Layer 2b).</strong> Score three things per resource, each from 0 to 1:
+            <ul style={{ marginTop: 4 }}>
+              <li><em>Exposure</em>: how reachable it is. A port open to the internet is 0.90, public network
+                access 0.60, a public IP 0.55. Exposure travels to linked resources but fades by a factor of
+                0.75 per hop, up to 3 hops.</li>
+              <li><em>Weakness</em>: how bad its own problems are. Critical findings weigh 0.80, high 0.60,
+                medium 0.35, low 0.15, counting only Security, Identity and Reliability findings.</li>
+              <li><em>Value</em>: how much it matters if compromised. Databases and secret stores 1.0, storage
+                0.9, VMs 0.8, scaled up for prod and down for dev.</li>
+            </ul>
+            Several sources are combined with "noisy-OR", the chance that at least one gets through:
+            1 &minus; (1 &minus; a)(1 &minus; b)&hellip; Risk = exposure &times; weakness &times; value. The
+            score is compared with the score the resource would have from its own exposure alone, and a
+            compound-risk finding is raised only if risk is at least 0.35 <em>and</em> the connection adds
+            at least 0.10.
+            <div style={{ margin: "6px 0", padding: "8px 10px", background: "var(--surface-2, transparent)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 13 }}>
+              <strong>Worked example (real AWS plan).</strong> The security group opens ports 22 and 5432 to
+              the internet and is attached to the database. The database has a plain-text password, zero
+              backups and no customer-managed key, so its weakness is 0.93; it is tagged dev, so its value is
+              0.80. Exposure reaching it is 0.90. Risk = 0.90 &times; 0.93 &times; 0.80 = <strong>0.67</strong>.
+              On its own it would score 0.52, so the connection adds 0.15: above both limits, reported as HIGH
+              with the path <code>aws_security_group.web &rarr; aws_db_instance.main</code>.
+            </div>
+          </li>
+          <li><strong>Thresholds &amp; waivers (Layer 3).</strong> Ignore waived findings. Any rule finding at high or critical
+            gives <strong>BLOCK</strong> (exit code 2, nothing is deployed). Otherwise any at medium gives{" "}
+            <strong>REMEDIATE</strong> (exit 1, warn). Otherwise <strong>PASS</strong> (exit 0,{" "}
+            <code>terraform apply</code> may run). Reasoning findings can raise a warning but never block on
+            their own under the default policy.</li>
+          <li><strong>Report.</strong> Write the same result as a PR comment, JSON, SARIF and PDF, each naming
+            the pillar broken and the fix.</li>
+        </ol>
+      </div>
+    </React.Fragment>
+  );
+}
+
 /* --- rules tab ------------------------------------------------------- */
 
 function RulesTab() {
@@ -533,12 +779,17 @@ function stageList(d) {
   const st = d.stats || {};
   const ms = st.stage_ms || {};
   const reasoningOn = st.graph_nodes !== undefined;
+  // A real pipeline run starts earlier: terraform itself produced the plan.
+  const terraform = (d.pipeline || [])
+    .filter((x) => x.name !== "agent gate")
+    .map((x) => ({ name: x.name, note: "real terraform CLI · " + x.cmd, ms: x.ms }));
   return [
+    ...terraform,
     { name: "Parse plan", note: d.resources_evaluated + " resource(s) mapped to canonical kinds", ms: null },
     { name: "Layer 1 · deterministic rules",
       note: (st.rules_evaluated || 0) + " rules checked → " + (st.findings_from_rules || 0) + " finding(s)",
       ms: ms.layer1_rules },
-    { name: "Layer 2 · reasoning probes",
+    { name: "Layer 2a · organisational customized policies",
       note: reasoningOn
         ? ((st.findings_from_reasoner || 0) - (st.findings_from_graph || 0)) + " finding(s)"
         : "switched off",
@@ -547,7 +798,7 @@ function stageList(d) {
       note: reasoningOn
         ? st.graph_nodes + " nodes, " + st.graph_edges + " edges → " + (st.findings_from_graph || 0) + " compound-risk finding(s)"
         : "switched off", ms: null },
-    { name: "Layer 3 · policy & waivers", note: "thresholds and expiring waivers applied", ms: ms.layer3_policy },
+    { name: "Layer 3 · thresholds & waivers", note: "thresholds and expiring waivers applied", ms: ms.layer3_policy },
     { name: "Verdict", note: String(d.verdict).toUpperCase(), ms: null },
   ];
 }
@@ -575,10 +826,12 @@ function PacingPanel({ pacing }) {
     <div className="panel">
       <h2>Running the gate&hellip;</h2>
       <p className="panel-sub">
-        <strong>Presentation pacing is on:</strong> the display steps through the
-        stages slowly so each one can be explained. The engine itself finished
-        in <strong>{d.duration_ms} ms</strong>; each stage's real measured time
-        appears as it completes. Switch pacing off above to see it at full speed.
+        <strong>Pacing is on:</strong> the display steps through the stages
+        slowly so each one can be explained. The engine itself finished in{" "}
+        <strong>{d.duration_ms} ms</strong>; each stage's real measured time
+        appears as it completes.
+        {d.pipeline ? " The terraform steps already ran for real; their times are the actual ones." : ""}{" "}
+        Switch pacing off above to see it at full speed.
       </p>
       <ol className="trace">
         {stages.map((st, i) => {
@@ -604,8 +857,8 @@ function GateTab({ result, loading, tooltip, steps, pacing }) {
   if (!result) {
     return (
       <div className="empty">
-        Choose a plan above, upload or drop a <code>plan.json</code>, paste one, or
-        run a real <code>terraform plan</code>.
+        Choose a plan above (or upload, drop or paste a <code>plan.json</code>), then
+        press <strong>Run gate</strong>. Nothing runs until you press it.
       </div>
     );
   }
@@ -622,26 +875,20 @@ function GateTab({ result, loading, tooltip, steps, pacing }) {
     .filter((s) => (stats.by_severity || {})[s])
     .map((s) => ({ label: s, value: stats.by_severity[s] }));
 
+  // Sections follow the order the agent works in: the plan it was given,
+  // Step 0 (parse), Layers 1 and 2a (findings), Layer 2b (graph), Layer 3
+  // (verdict), then the report it writes.
   return (
     <React.Fragment>
-      <div className={"verdict " + result.verdict}>
-        <span className="icon" aria-hidden="true">{v.icon}</span>
-        <span>
-          <div className="label">{v.label}</div>
-          <div className="detail">{v.detail}</div>
-        </span>
-        <span className="exit-code">
-          exit code
-          <code>{v.exit}</code>
-        </span>
-      </div>
-
+      <StageLabel step="Input" title="The plan that was evaluated" />
       <SourceBar result={result} />
-      <ExportBar result={result} />
       <PipelineSteps steps={steps} />
       <PipelineTrace result={result} steps={steps} />
-      <GraphPanel key={result.generated_at + result.plan_name} result={result} />
 
+      <StageLabel step="Step 0" title="Read the plan" />
+      <ResourceTable result={result} />
+
+      <StageLabel step="Layers 1 + 2a" title="What the rules and the organisational customized policies found" />
       <div className="tiles">
         <div className="tile">
           <div className="value">{result.resources_evaluated}</div>
@@ -673,9 +920,9 @@ function GateTab({ result, loading, tooltip, steps, pacing }) {
       <div className="panel" style={{ marginBottom: 14 }}>
         <h2>Which layer found what</h2>
         <p className="panel-sub">
-          Turn the reasoning layer off in the controls above and watch the
-          orange segment disappear &mdash; those are findings no hand-written
-          rule produces.
+          Turn the reasoning layer off in the controls above and run again: the
+          orange segment disappears &mdash; those are findings no Layer-1 rule
+          produces.
         </p>
         <LayerSplit
           rules={stats.findings_from_rules || 0}
@@ -714,9 +961,38 @@ function GateTab({ result, loading, tooltip, steps, pacing }) {
         </div>
       </div>
 
-      <ResourceTable result={result} />
       <FindingsPanel result={result} />
+
+      <StageLabel step="Layer 2b" title="Dependency-graph risk" />
+      <GraphPanel key={result.generated_at + result.plan_name} result={result} />
+
+      <StageLabel step="Layer 3" title="Thresholds & waivers, and the verdict" />
+      <div className={"verdict " + result.verdict}>
+        <span className="icon" aria-hidden="true">{v.icon}</span>
+        <span>
+          <div className="label">{v.label}</div>
+          <div className="detail">{v.detail}</div>
+        </span>
+        <span className="exit-code">
+          exit code
+          <code>{v.exit}</code>
+        </span>
+      </div>
+
+
+      <StageLabel step="Report" title="Download what the pipeline publishes" />
+      <ExportBar result={result} />
     </React.Fragment>
+  );
+}
+
+/* A small heading naming the agent stage the next panels belong to. */
+function StageLabel({ step, title }) {
+  return (
+    <div className="stage-label">
+      <span className="stage-step">{step}</span>
+      <span>{title}</span>
+    </div>
   );
 }
 
@@ -752,7 +1028,7 @@ function PipelineTrace({ result, steps }) {
     { name: "Layer 1 · deterministic rules", ms: s.layer1_rules, ok: true,
       note: ((result.stats || {}).rules_evaluated || 0) + " rules → " +
             ((result.stats || {}).findings_from_rules || 0) + " findings" },
-    { name: "Layer 2 · reasoning (" + result.reasoner + ")", ms: s.layer2_reasoning, ok: true,
+    { name: "Layer 2a · organisational customized policies (" + result.reasoner + ")", ms: s.layer2_reasoning, ok: true,
       note: (((result.stats || {}).findings_from_reasoner || 0) -
              ((result.stats || {}).findings_from_graph || 0)) + " findings" },
     ...((result.stats || {}).graph_nodes === undefined ? [] : [{
@@ -760,7 +1036,7 @@ function PipelineTrace({ result, steps }) {
       note: (result.stats.graph_nodes) + " nodes, " + (result.stats.graph_edges) +
             " edges → " + (result.stats.findings_from_graph || 0) + " compound-risk finding(s)",
     }]),
-    { name: "Layer 3 · policy & waivers", ms: s.layer3_policy, ok: true,
+    { name: "Layer 3 · thresholds & waivers", ms: s.layer3_policy, ok: true,
       note: "verdict " + result.verdict.toUpperCase() },
   ];
   return (
@@ -823,7 +1099,9 @@ const KIND_GLYPH = {
   compute_instance: "\u{1F5A5}️", container_platform: "☸️", app_hosting: "\u{1F9E9}",
   log_workspace: "\u{1F4C8}", other: "◆",
 };
-const riskColor = (r) => (r >= 0.45 ? "#ff4d6d" : r >= 0.2 ? "#ffc857" : "#3ddc97");
+// Same bands the engine uses to grade a compound-risk finding (graph.py):
+// high from 0.60, medium from 0.45, so a node's colour matches its finding.
+const riskColor = (r) => (r >= 0.60 ? "#ff4d6d" : r >= 0.45 ? "#ffc857" : "#3ddc97");
 const GW = 960, GH = 540;
 
 /* Small deterministic force layout: repulsion between all nodes, springs on
@@ -883,12 +1161,16 @@ function GraphPanel({ result }) {
     });
     // multi-source BFS: hop distance from the nearest exposure source
     const decay = (model.params || {}).decay || 0.75;
+    // Stop where the engine stops, or the animation would light up nodes
+    // the engine never scored (e.g. a database four hops away).
+    const maxHops = (model.params || {}).max_hops || 3;
     const dist = model.nodes.map(() => Infinity);
     const arriving = model.nodes.map(() => 0);
     const queue = [];
     model.nodes.forEach((nd, i) => { if (nd.exposure_self >= 0.3) { dist[i] = 0; arriving[i] = nd.exposure_self; queue.push(i); } });
     for (let h = 0; h < queue.length; h++) {
       const u = queue[h];
+      if (dist[u] >= maxHops) continue;
       adj[u].forEach((v) => {
         if (dist[v] === Infinity) { dist[v] = dist[u] + 1; arriving[v] = arriving[u] * decay; queue.push(v); }
       });
@@ -937,19 +1219,11 @@ function GraphPanel({ result }) {
         </button>
       </div>
 
-      {!hasEdges && (
-        <div className="gp-nolinks">
-          <strong>This plan has no resource links to draw.</strong> Hand-written example files carry
-          no Terraform configuration block, so there is nothing connected. Choose{" "}
-          <em>Real terraform plan &ndash; aws_noncompliant</em> (or <em>noncompliant</em>) in the
-          Plan dropdown, or click <em>terraform plan &rarr; gate</em>, to see the graph.
-        </div>
-      )}
-
       {open && (
         <div className="graph-stage">
           <div className="gp-bar">
-            <button className="primary" onClick={simulate} disabled={!hasEdges}>
+            <button className="primary" onClick={simulate} disabled={!hasEdges}
+              title={hasEdges ? "" : "This plan has no links between resources to spread along."}>
               {"▶"} Simulate exposure spread
             </button>
             <button className="gp-ghost" onClick={reset}>{"↺"} Reset</button>
@@ -983,13 +1257,6 @@ function GraphPanel({ result }) {
             <rect width={GW} height={GH} fill="url(#bgfade)" />
             <rect width={GW} height={GH} fill="url(#dots)" />
 
-            {!hasEdges && (
-              <text x={GW / 2} y={GH - 22} textAnchor="middle" fill="#8aa0d6" fontSize="14">
-                No dependency edges in this plan. Hand-written fixtures carry no configuration
-                block; run the real pipeline to see links.
-              </text>
-            )}
-
             {model.edges.map(([a, b], k) => {
               const A = g.pos[g.idx[a]], B = g.pos[g.idx[b]];
               if (!A || !B) return null;
@@ -1020,13 +1287,15 @@ function GraphPanel({ result }) {
               const src = nd.exposure_self >= 0.3;
               const col = riskColor(nd.risk);
               const lit = live ? true : shown(i);
-              const ring = nd.flagged && (live || final) ? "#ff4d6d" : col;
+              // Colour always follows the legend; the pulsing ring alone marks
+              // a compound path, whatever its level.
+              const ring = col;
               return (
                 <g key={nd.id} transform={"translate(" + q.x + "," + q.y + ")"}
                    style={{ cursor: "pointer" }} onClick={() => setSel(nd.id)}
                    opacity={live || lit || g.dist[i] === Infinity ? 1 : 0.55}>
                   {src && lit && <circle r={r + 6} fill="none" stroke="#ff9f1c" strokeWidth="2" className="gp-radar" />}
-                  {nd.flagged && (live || final) && <circle r={r + 8} fill="none" stroke="#ff4d6d" strokeWidth="3" className="gp-alarm" />}
+                  {nd.flagged && (live || final) && <circle r={r + 8} fill="none" stroke={col} strokeWidth="3" className="gp-alarm" />}
                   <circle r={r} fill="#0a1128" stroke={live || final ? ring : lit && src ? "#ff9f1c" : "#46557f"}
                           strokeWidth="3" filter={(live || lit) ? "url(#glow)" : undefined} />
                   <text textAnchor="middle" dy="0.35em" fontSize={r * 0.95}>{KIND_GLYPH[nd.kind] || "◆"}</text>
@@ -1075,8 +1344,8 @@ function GraphPanel({ result }) {
             ) : (
               <div className="gp-hint">
                 Click any node for its numbers. Risk = reachable exposure {"×"} weakness {"×"} asset value.
-                A red ring is high risk on its own (a rule already reports it); only the
-                <strong> pulsing alarm ring</strong> marks a compound path the graph found.
+                Ring colour is the risk level from the legend (high from 0.60, medium from 0.45);
+                a <strong>pulsing ring</strong> marks a compound path the graph reported.
               </div>
             )}
             {(model.flagged_paths || []).map((fp, k) => (
@@ -1253,18 +1522,20 @@ function App() {
   // `source` is the single thing being evaluated: a catalogued plan or text
   // the user supplied. Toggling the reasoning layer re-evaluates THIS, so an
   // uploaded plan is never silently swapped for a preloaded one.
-  // Optional deep links, handy for demos and screenshots:
-  //   /?plan=team_demo.plan.json&tab=benchmark&reasoning=off&run=aws_noncompliant
+  // Optional deep links preselect the inputs; nothing runs until Run is pressed:
+  //   /?plan=team_demo.plan.json&tab=benchmark&reasoning=off
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
   const [source, setSource] = useState({
     type: "catalog",
-    key: query.get("plan") || "azure_noncompliant.plan.json",
+    // Default to real terraform output: it carries the dependency links the
+    // graph layer needs, which the hand-written fixtures do not.
+    key: query.get("plan") || "real/azure_noncompliant.plan.json",
   });
   const [reasoning, setReasoning] = useState(query.get("reasoning") !== "off");
   const [tab, setTab] = useState(query.get("tab") || "gate");
   const [result, setResult] = useState(null);
   const [steps, setSteps] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState(null);
   const [errorSteps, setErrorSteps] = useState(null);
@@ -1295,6 +1566,8 @@ function App() {
     setLoading(true);
     setError(null);
     setErrorSteps(null);
+    setSteps(null);
+    setTab("gate");
     const req = source.type === "catalog"
       ? fetch(`/api/evaluate?plan=${encodeURIComponent(source.key)}&reasoner=${reasoner}`)
       : fetch(`/api/evaluate?reasoner=${reasoner}&name=${encodeURIComponent(source.name)}`, {
@@ -1308,7 +1581,7 @@ function App() {
         if (myRun !== runId.current) return;          // a newer request took over
         if (d.error) { setError(d.error); setResult(null); return; }
         if (!pace) { setResult(d); return; }
-        // Presentation pacing: step through the stages so each can be explained.
+        // Pacing: step through the stages so each can be explained.
         return stepThrough(d, setPacing, () => myRun === runId.current).then(() => {
           if (myRun === runId.current) setResult(d);
         });
@@ -1317,14 +1590,18 @@ function App() {
       .finally(() => { if (myRun === runId.current) { setPacing(null); setLoading(false); } });
   }, [source, reasoner, pace]);
 
+  // Changing the plan or the reasoning switch only clears the old result, so
+  // a stale verdict is never shown next to new inputs. Running is explicit.
   useEffect(() => {
-    if (tab !== "gate") return;
-    if (skipRef.current) { skipRef.current = false; setLoading(false); return; }
-    evaluate();
-  }, [evaluate, tab]);
+    if (skipRef.current) { skipRef.current = false; return; }
+    runId.current += 1;
+    setResult(null);
+    setSteps(null);
+    setPacing(null);
+    setLoading(false);
+  }, [source, reasoner]);
 
   const useText = (text, name) => {
-    setSteps(null);
     setSource({ type: "text", text, name });
     setTab("gate");
   };
@@ -1352,30 +1629,34 @@ function App() {
     setError(null);
     setErrorSteps(null);
     setTab("gate");
+    const myRun = ++runId.current;
+    const show = (d) => {
+      setResult(d);
+      setSteps(d.pipeline || null);
+      // Point the selector at the plan just produced without clearing it.
+      skipRef.current = true;
+      setSource({ type: "catalog", key: "terraform/" + mod });
+      loadCatalog();
+    };
     fetch(`/api/terraform/run?module=${encodeURIComponent(mod)}&reasoner=${reasoner}`, { method: "POST" })
       .then((r) => r.json())
       .then((d) => {
+        if (myRun !== runId.current) return;
         if (d.error) { setError(d.error); setErrorSteps(d.pipeline || null); return; }
-        setResult(d);
-        setSteps(d.pipeline || null);
-        const key = "terraform/" + mod;
-        if (!(source.type === "catalog" && source.key === key)) skipRef.current = true;
-        setSource({ type: "catalog", key });
-        loadCatalog();
+        if (!pace) { show(d); return; }
+        // Pacing: replay terraform's steps and the agent's stages one by one.
+        setBusy("");
+        setResult(null);
+        setLoading(true);
+        return stepThrough(d, setPacing, () => myRun === runId.current).then(() => {
+          if (myRun === runId.current) show(d);
+        });
       })
       .catch((e) => setError(String(e)))
-      .finally(() => { setBusy(""); setLoading(false); });
+      .finally(() => {
+        if (myRun === runId.current) { setPacing(null); setBusy(""); setLoading(false); }
+      });
   };
-
-  const autoRun = useRef(false);
-  useEffect(() => {
-    const want = query.get("run");
-    if (want && !autoRun.current && (catalog.terraform_modules || []).includes(want)) {
-      autoRun.current = true;
-      setTfModule(want);
-      setTimeout(() => runTerraform(want), 0);
-    }
-  });
 
   const groups = {};
   (catalog.plans || []).forEach((p) => { (groups[p.group] = groups[p.group] || []).push(p); });
@@ -1444,8 +1725,12 @@ function App() {
             onChange={(e) => setPace(e.target.checked)}
           />
           <span className="track"><span className="thumb" /></span>
-          <span className="switch-label">Presentation pacing</span>
+          <span className="switch-label">Pacing</span>
         </label>
+
+        <button className="primary" disabled={loading || !!busy} onClick={evaluate}>
+          {loading ? "Running…" : "Run gate"}
+        </button>
 
         <label className="file-btn">
           Upload plan.json
@@ -1456,7 +1741,7 @@ function App() {
         </button>
 
         <div className="tabs" role="tablist">
-          {[["gate", "Gate"], ["benchmark", "Benchmark"], ["rules", "Rules"]].map(
+          {[["gate", "Gate"], ["benchmark", "Benchmark"], ["rules", "Rules"], ["about", "How it works"]].map(
             ([id, label]) => (
               <button
                 key={id}
@@ -1527,6 +1812,7 @@ function App() {
       )}
       {tab === "benchmark" && <BenchmarkTab tooltip={tooltip} />}
       {tab === "rules" && <RulesTab />}
+      {tab === "about" && <AboutTab />}
 
       <p className="footnote">
         Agent SecOps &middot; Project 19727UG01 &middot; In the real pipeline the gate is a

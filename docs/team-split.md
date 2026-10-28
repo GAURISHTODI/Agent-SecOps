@@ -21,7 +21,7 @@ This is the intellectual core of the project: the part that goes beyond "check a
 
 | Path | What it is |
 |---|---|
-| `agent/engine.py` | The orchestrator — runs Layer 1 (rules) → Layer 2 (reasoning) → Layer 3 (policy), produces the final verdict |
+| `agent/engine.py` | The orchestrator — runs Layer 1 (rules) → Layer 2a (organisational customized policies) + 2b (graph) → Layer 3 (thresholds & waivers), produces the final verdict |
 | `agent/config.py` | The policy engine — thresholds, rule overrides, time-boxed waivers |
 | `agent/reasoner/base.py` | Shared retrieval logic: pulls only the relevant CAF/WAF guidance for a resource |
 | `agent/reasoner/offline.py` | The free, deterministic reasoning layer — 12 heuristic probes, the CI default |
@@ -137,7 +137,7 @@ This is the connective tissue: wiring the engine into a real GitHub Actions pipe
 # Integration checklist
 
 ```bash
-python -m pytest tests/ -q          # 63 passed
+python -m pytest tests/ -q          # 146 passed
 python scripts/benchmark.py         # 100% detection, 0 false positives
 python -m dashboard.server          # dashboard loads, all 3 tabs work
 bash scripts/demo.sh                # full local walkthrough, no cloud needed

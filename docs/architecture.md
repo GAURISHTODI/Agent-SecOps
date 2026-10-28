@@ -25,11 +25,11 @@ terraform show -json tf.plan  ──►  plan.json
 │       ├─► Layer 1: deterministic CAF/WAF rules│
 │       │            (22 rules, confidence 1.0) │
 │       │                                       │
-│       ├─► Layer 2: framework reasoning        │
-│       │            (what no rule encodes)     │
+│       ├─► Layer 2a: organisational customized │
+│       │             policies (+ 2b graph)     │
 │       │                                       │
-│       └─► Layer 3: org policy                 │
-│                    thresholds + waivers       │
+│       └─► Layer 3: thresholds & waivers       │
+│                    (then the verdict)         │
 │                          │                    │
 │                     verdict + report          │
 └──────────────────────────┬────────────────────┘
@@ -219,13 +219,13 @@ The workflow plans **both** modules on every PR: the compliant one must pass, an
 
 ## 8. Testing strategy
 
-63 tests, three levels:
+146 tests, three levels (plus real-plan regression tests in `tests/test_real_plans.py` and dependency-graph stress tests on the seeded `aws_mesh` module and synthetic chains, rings and hubs in `tests/test_graph_complex.py`):
 
 - **Parser** — provider detection, kind mapping across three clouds, replace-as-create, the firewall/database regression, AWS tag-list and GCP label normalization.
 - **Rules** — every rule tested in **both** directions: it must fire on the violation and stay silent on the compliant equivalent. False-positive tests are as numerous as detection tests, because a gate that cries wolf gets switched off.
 - **Engine** — verdicts, waiver expiry, threshold changes, both layers contributing, no duplication between layers, all three report formats, CLI exit codes, and a deliberately malformed plan that must produce a verdict rather than a traceback.
 
-Plus `scripts/benchmark.py`, which measures recall against 42 labelled violations and false positives against the clean module, and reports the reasoning layer's marginal contribution. Current: **100% detection, 0 false positives, 5 violations recovered by reasoning alone.**
+Plus `scripts/benchmark.py`, which measures recall against 42 labelled violations and false positives against the clean module, and reports the reasoning layer's marginal contribution. Current: **100% detection (33/42 by rules alone), 0 verdict-affecting false positives, 9 violations recovered by reasoning alone**, on both the hand-written fixtures and real terraform plan output.
 
 ---
 

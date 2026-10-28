@@ -15,6 +15,11 @@ To measure that honestly you need three numbers, not one:
      the actual research claim, since the rules layer is roughly what a
      static scanner like Checkov already gives you.
 
+Each number is measured twice: on the hand-written fixtures in
+`examples/plans/`, and on genuine `terraform show -json` output from the
+seeded modules in `examples/terraform/`, saved in `examples/plans/real/`.
+The second set is what the CI pipeline actually feeds the gate.
+
 Run:  python scripts/benchmark.py
       python scripts/benchmark.py --markdown docs/benchmark-results.md
 """
@@ -36,96 +41,104 @@ from agent.models import GateResult, Verdict  # noqa: E402
 from agent.plan_parser import load_plan  # noqa: E402
 
 PLANS = ROOT / "examples" / "plans"
+REAL_PLANS = PLANS / "real"
 POLICY = ROOT / "policies" / "policy.yaml"
 
+# Titles of the offline reasoning probes, so ground truth can name them the
+# same way it names a rule id.
+NET_ALLOW = "Data service has no network allow-list (open default action)"
+SHARED_KEYS = "Shared access keys left enabled where identity-based auth would do"
+VERSIONING = "Irreplaceable data stored without versioning"
+FIREWALL_ALL = "Database firewall rule spans the entire IPv4 range"
+VM_PASSWORD = "Virtual machine allows password authentication"
+VM_ZONE = "Single instance with no availability construct"
+KV_RBAC = "Key vault uses legacy access policies instead of RBAC"
+
 # The ground truth. Each entry is a violation deliberately seeded into the
-# fixture, labelled with the resource it lives on and the pillar it breaks.
-# This is what makes the benchmark a measurement rather than a demo.
-GROUND_TRUTH: Dict[str, List[Dict[str, str]]] = {
+# module, labelled with the resource it lives on, the pillar it breaks, and
+# the rule id or reasoning probe that should report it. A violation counts as
+# detected only when that specific check fires on that specific resource --
+# another finding that merely shares the pillar does not count.
+GROUND_TRUTH: Dict[str, List[Dict[str, object]]] = {
     "azure_noncompliant.plan.json": [
-        {"resource": "azurerm_resource_group.rg", "issue": "unapproved region", "pillar": "CAF:LandingZone"},
-        {"resource": "azurerm_resource_group.rg", "issue": "missing governance tags", "pillar": "CAF:Governance"},
-        {"resource": "azurerm_storage_account.data", "issue": "http allowed", "pillar": "WAF:Security"},
-        {"resource": "azurerm_storage_account.data", "issue": "TLS 1.0", "pillar": "WAF:Security"},
-        {"resource": "azurerm_storage_account.data", "issue": "anonymous blob access", "pillar": "WAF:Security"},
-        {"resource": "azurerm_storage_account.data", "issue": "LRS replication", "pillar": "WAF:Reliability"},
-        {"resource": "azurerm_storage_account.data", "issue": "public network access", "pillar": "CAF:LandingZone"},
-        {"resource": "azurerm_storage_account.data", "issue": "network default allow", "pillar": "CAF:LandingZone"},
-        {"resource": "azurerm_storage_account.data", "issue": "shared keys enabled", "pillar": "WAF:Security"},
-        {"resource": "azurerm_storage_account.data", "issue": "versioning disabled", "pillar": "WAF:Reliability"},
-        {"resource": "azurerm_storage_account.data", "issue": "hot tier for archive data", "pillar": "WAF:Sustainability"},
-        {"resource": "azurerm_mssql_server.db", "issue": "hardcoded password", "pillar": "WAF:Security"},
-        {"resource": "azurerm_mssql_server.db", "issue": "TLS 1.0", "pillar": "WAF:Security"},
-        {"resource": "azurerm_mssql_server.db", "issue": "1-day backup retention", "pillar": "WAF:Reliability"},
-        {"resource": "azurerm_mssql_server.db", "issue": "public network access", "pillar": "CAF:LandingZone"},
-        {"resource": "azurerm_mssql_firewall_rule.allow_all", "issue": "firewall spans all IPv4", "pillar": "WAF:Security"},
-        {"resource": "azurerm_network_security_rule.ssh", "issue": "ssh open to internet", "pillar": "WAF:Security"},
-        {"resource": "azurerm_linux_virtual_machine.app", "issue": "hardcoded password", "pillar": "WAF:Security"},
-        {"resource": "azurerm_linux_virtual_machine.app", "issue": "password auth enabled", "pillar": "WAF:Security"},
-        {"resource": "azurerm_linux_virtual_machine.app", "issue": "premium SKU in dev", "pillar": "WAF:CostOptimization"},
-        {"resource": "azurerm_linux_virtual_machine.app", "issue": "no availability zone", "pillar": "WAF:Reliability"},
-        {"resource": "azurerm_linux_virtual_machine.app", "issue": "no cost centre tag", "pillar": "CAF:CostManagement"},
-        {"resource": "azurerm_role_assignment.app_owner", "issue": "Owner at subscription scope", "pillar": "CAF:Identity"},
-        {"resource": "azurerm_key_vault.kv", "issue": "purge protection off", "pillar": "WAF:Reliability"},
-        {"resource": "azurerm_key_vault.kv", "issue": "access policies not RBAC", "pillar": "CAF:Identity"},
-        {"resource": "azurerm_key_vault.kv", "issue": "public network access", "pillar": "CAF:LandingZone"},
-        {"resource": "azurerm_public_ip.edge", "issue": "unjustified public exposure", "pillar": "CAF:LandingZone"},
-        {"resource": "azurerm_public_ip.edge", "issue": "static IP idle in dev", "pillar": "WAF:CostOptimization"},
+        {"resource": "azurerm_resource_group.rg", "issue": "unapproved region", "pillar": "CAF:LandingZone", "match": ["CAF-LZ-001"]},
+        {"resource": "azurerm_resource_group.rg", "issue": "missing governance tags", "pillar": "CAF:Governance", "match": ["CAF-GOV-001"]},
+        {"resource": "azurerm_storage_account.data", "issue": "http allowed", "pillar": "WAF:Security", "match": ["WAF-SEC-001"]},
+        {"resource": "azurerm_storage_account.data", "issue": "TLS 1.0", "pillar": "WAF:Security", "match": ["WAF-SEC-002"]},
+        {"resource": "azurerm_storage_account.data", "issue": "anonymous blob access", "pillar": "WAF:Security", "match": ["WAF-SEC-003"]},
+        {"resource": "azurerm_storage_account.data", "issue": "LRS replication", "pillar": "WAF:Reliability", "match": ["WAF-REL-001"]},
+        {"resource": "azurerm_storage_account.data", "issue": "public network access", "pillar": "CAF:LandingZone", "match": ["CAF-LZ-002"]},
+        {"resource": "azurerm_storage_account.data", "issue": "network default allow", "pillar": "CAF:LandingZone", "match": [NET_ALLOW]},
+        {"resource": "azurerm_storage_account.data", "issue": "shared keys enabled", "pillar": "WAF:Security", "match": [SHARED_KEYS]},
+        {"resource": "azurerm_storage_account.data", "issue": "versioning disabled", "pillar": "WAF:Reliability", "match": [VERSIONING]},
+        {"resource": "azurerm_storage_account.data", "issue": "hot tier for archive data", "pillar": "WAF:Sustainability", "match": ["WAF-SUS-001"]},
+        {"resource": "azurerm_mssql_server.db", "issue": "hardcoded password", "pillar": "WAF:Security", "match": ["WAF-SEC-006"]},
+        {"resource": "azurerm_mssql_server.db", "issue": "TLS 1.0", "pillar": "WAF:Security", "match": ["WAF-SEC-002"]},
+        {"resource": "azurerm_mssql_database.db", "issue": "1-day backup retention", "pillar": "WAF:Reliability", "match": ["WAF-REL-002"]},
+        {"resource": "azurerm_mssql_server.db", "issue": "public network access", "pillar": "CAF:LandingZone", "match": ["CAF-LZ-002"]},
+        {"resource": "azurerm_mssql_firewall_rule.allow_all", "issue": "firewall spans all IPv4", "pillar": "WAF:Security", "match": [FIREWALL_ALL]},
+        {"resource": "azurerm_network_security_rule.ssh", "issue": "ssh open to internet", "pillar": "WAF:Security", "match": ["WAF-SEC-004"]},
+        {"resource": "azurerm_linux_virtual_machine.app", "issue": "hardcoded password", "pillar": "WAF:Security", "match": ["WAF-SEC-006"]},
+        {"resource": "azurerm_linux_virtual_machine.app", "issue": "password auth enabled", "pillar": "WAF:Security", "match": [VM_PASSWORD]},
+        {"resource": "azurerm_linux_virtual_machine.app", "issue": "premium SKU in dev", "pillar": "WAF:CostOptimization", "match": ["WAF-COST-001"]},
+        {"resource": "azurerm_linux_virtual_machine.app", "issue": "no availability zone", "pillar": "WAF:Reliability", "match": [VM_ZONE]},
+        {"resource": "azurerm_linux_virtual_machine.app", "issue": "no cost centre tag", "pillar": "CAF:CostManagement", "match": ["CAF-COST-001"]},
+        {"resource": "azurerm_role_assignment.app_owner", "issue": "Owner at subscription scope", "pillar": "CAF:Identity", "match": ["CAF-IAM-001"]},
+        {"resource": "azurerm_key_vault.kv", "issue": "purge protection off", "pillar": "WAF:Reliability", "match": ["WAF-REL-003"]},
+        {"resource": "azurerm_key_vault.kv", "issue": "access policies not RBAC", "pillar": "CAF:Identity", "match": [KV_RBAC]},
+        {"resource": "azurerm_key_vault.kv", "issue": "public network access", "pillar": "CAF:LandingZone", "match": ["CAF-LZ-002"]},
+        {"resource": "azurerm_public_ip.edge", "issue": "unjustified public exposure", "pillar": "CAF:LandingZone", "match": ["CAF-LZ-003"]},
+        {"resource": "azurerm_public_ip.edge", "issue": "static IP idle in dev", "pillar": "WAF:CostOptimization", "match": ["WAF-COST-002"]},
     ],
     "aws_noncompliant.plan.json": [
-        {"resource": "aws_s3_bucket.data", "issue": "public-read ACL", "pillar": "WAF:Security"},
-        {"resource": "aws_s3_bucket.data", "issue": "versioning disabled", "pillar": "WAF:Reliability"},
-        {"resource": "aws_s3_bucket.data", "issue": "unapproved region", "pillar": "CAF:LandingZone"},
-        {"resource": "aws_security_group.web", "issue": "ssh + postgres open to internet", "pillar": "WAF:Security"},
-        {"resource": "aws_db_instance.main", "issue": "hardcoded password", "pillar": "WAF:Security"},
-        {"resource": "aws_db_instance.main", "issue": "zero backup retention", "pillar": "WAF:Reliability"},
-        {"resource": "aws_db_instance.main", "issue": "skip final snapshot", "pillar": "WAF:OperationalExcellence"},
-        {"resource": "aws_iam_role_policy.admin", "issue": "wildcard actions", "pillar": "CAF:Identity"},
+        {"resource": "aws_s3_bucket.data", "issue": "public-read ACL", "pillar": "WAF:Security", "match": ["WAF-SEC-003"]},
+        {"resource": "aws_s3_bucket.data", "issue": "versioning disabled", "pillar": "WAF:Reliability", "match": [VERSIONING]},
+        {"resource": "aws_s3_bucket.data", "issue": "unapproved region", "pillar": "CAF:LandingZone", "match": ["CAF-LZ-001"]},
+        {"resource": "aws_security_group.web", "issue": "ssh + postgres open to internet", "pillar": "WAF:Security", "match": ["WAF-SEC-004"]},
+        {"resource": "aws_db_instance.main", "issue": "hardcoded password", "pillar": "WAF:Security", "match": ["WAF-SEC-006"]},
+        {"resource": "aws_db_instance.main", "issue": "zero backup retention", "pillar": "WAF:Reliability", "match": ["WAF-REL-002"]},
+        {"resource": "aws_db_instance.main", "issue": "skip final snapshot", "pillar": "WAF:OperationalExcellence", "match": ["WAF-OPS-002"]},
+        {"resource": "aws_iam_role_policy.admin", "issue": "wildcard actions", "pillar": "CAF:Identity", "match": ["CAF-IAM-001"]},
     ],
     "gcp_noncompliant.plan.json": [
-        {"resource": "google_storage_bucket.data", "issue": "unapproved region", "pillar": "CAF:LandingZone"},
-        {"resource": "google_storage_bucket.data", "issue": "versioning disabled", "pillar": "WAF:Reliability"},
-        {"resource": "google_compute_firewall.allow_ssh", "issue": "ssh/rdp open to internet", "pillar": "WAF:Security"},
-        {"resource": "google_sql_database_instance.main", "issue": "hardcoded password", "pillar": "WAF:Security"},
-        {"resource": "google_sql_database_instance.main", "issue": "zero backup retention", "pillar": "WAF:Reliability"},
-        {"resource": "google_project_iam_member.owner", "issue": "roles/owner granted", "pillar": "CAF:Identity"},
+        {"resource": "google_storage_bucket.data", "issue": "unapproved region", "pillar": "CAF:LandingZone", "match": ["CAF-LZ-001"]},
+        {"resource": "google_storage_bucket.data", "issue": "versioning disabled", "pillar": "WAF:Reliability", "match": [VERSIONING]},
+        {"resource": "google_compute_firewall.allow_ssh", "issue": "ssh/rdp open to internet", "pillar": "WAF:Security", "match": ["WAF-SEC-004"]},
+        {"resource": "google_sql_database_instance.main", "issue": "hardcoded password", "pillar": "WAF:Security", "match": ["WAF-SEC-006"]},
+        {"resource": "google_sql_database_instance.main", "issue": "backups disabled", "pillar": "WAF:Reliability", "match": ["WAF-REL-002"]},
+        {"resource": "google_project_iam_member.owner", "issue": "roles/owner granted", "pillar": "CAF:Identity", "match": ["CAF-IAM-001"]},
     ],
 }
 
 CLEAN_PLANS = ["azure_compliant.plan.json"]
 
 
-def _run(plan_name: str, use_reasoner: bool) -> GateResult:
+def _run(plan_path: Path, use_reasoner: bool) -> GateResult:
     policy = load_policy(str(POLICY))
     if not use_reasoner:
         policy.reasoner = ReasonerConfig(provider="none", enabled=False)
-    return evaluate_plan(load_plan(str(PLANS / plan_name)), policy)
+    return evaluate_plan(load_plan(str(plan_path)), policy)
 
 
-def _detected(result: GateResult, expected: Dict[str, str]) -> bool:
-    """Did any finding on the right resource cover the right pillar?
-
-    Matching on (resource, pillar) rather than on exact rule id is the fair
-    test: the point is whether the violation was surfaced to the developer,
-    not which internal rule id happened to surface it.
-    """
+def _detected(result: GateResult, expected: Dict[str, object]) -> bool:
+    """Did the named check fire on the named resource?"""
+    names = set(expected["match"])  # type: ignore[arg-type]
     return any(
-        f.resource_address == expected["resource"] and f.pillar.value == expected["pillar"]
+        f.resource_address == expected["resource"]
+        and (f.rule_id in names or f.title in names)
         for f in result.active
     )
 
 
-def evaluate() -> Dict[str, object]:
-    started = time.time()
+def _evaluate_set(directory: Path) -> Dict[str, object]:
     report: Dict[str, object] = {"suites": [], "clean": [], "totals": {}}
-
     total_seeded = 0
     total_rules_only = 0
     total_both = 0
 
     for plan_name, truth in GROUND_TRUTH.items():
-        rules_only = _run(plan_name, use_reasoner=False)
-        both = _run(plan_name, use_reasoner=True)
+        rules_only = _run(directory / plan_name, use_reasoner=False)
+        both = _run(directory / plan_name, use_reasoner=True)
 
         missed_by_rules = [t for t in truth if not _detected(rules_only, t)]
         missed_by_both = [t for t in truth if not _detected(both, t)]
@@ -147,20 +160,26 @@ def evaluate() -> Dict[str, object]:
             "duration_ms": both.duration_ms,
         })
 
+    remediate_at = load_policy(str(POLICY)).remediate_at
     for plan_name in CLEAN_PLANS:
-        result = _run(plan_name, use_reasoner=True)
+        result = _run(directory / plan_name, use_reasoner=True)
+        # A false positive is a finding that changes the verdict on clean
+        # code. Low-severity advisories are listed too, but they do not stop
+        # or flag a deployment.
+        blocking = [f for f in result.active if f.severity.rank >= remediate_at.rank]
+        advisory = [f for f in result.active if f.severity.rank < remediate_at.rank]
         report["clean"].append({
             "plan": plan_name,
-            "false_positives": len(result.active),
+            "false_positives": len(blocking),
+            "advisories": len(advisory),
             "details": [
-                "{} on {}".format(f.rule_id, f.resource_address)
+                "{} on {} ({})".format(f.rule_id, f.resource_address, f.severity.value)
                 for f in result.active
             ],
             "verdict": result.verdict.value,
             "verdict_correct": result.verdict is Verdict.PASS,
         })
 
-    false_positives = sum(c["false_positives"] for c in report["clean"])
     report["totals"] = {
         "seeded_violations": total_seeded,
         "detected_rules_only": total_rules_only,
@@ -168,21 +187,32 @@ def evaluate() -> Dict[str, object]:
         "recall_rules_only": round(total_rules_only / total_seeded, 3),
         "recall_with_reasoning": round(total_both / total_seeded, 3),
         "reasoning_uplift": total_both - total_rules_only,
-        "false_positives_on_clean_plan": false_positives,
-        "wall_clock_s": round(time.time() - started, 2),
+        "false_positives_on_clean_plan": sum(c["false_positives"] for c in report["clean"]),
+        "advisories_on_clean_plan": sum(c["advisories"] for c in report["clean"]),
     }
     return report
 
 
-def to_markdown(report: Dict[str, object]) -> str:
-    totals = report["totals"]
+def evaluate() -> Dict[str, object]:
+    """Score the hand-written fixtures; real plans are under `real`.
+
+    The top-level keys describe the fixture set (the dashboard reads them);
+    `real` has the same shape for genuine terraform output.
+    """
+    started = time.time()
+    report = _evaluate_set(PLANS)
+    if all((REAL_PLANS / name).is_file() for name in [*GROUND_TRUTH, *CLEAN_PLANS]):
+        report["real"] = _evaluate_set(REAL_PLANS)
+    report["totals"]["wall_clock_s"] = round(time.time() - started, 2)
+    return report
+
+
+def _section(title: str, intro: str, data: Dict[str, object]) -> List[str]:
+    totals = data["totals"]
     lines = [
-        "# Agent SecOps -- Benchmark Results",
+        "## {}".format(title),
         "",
-        "Measured against the seeded misconfiguration test set in "
-        "`examples/plans/`, with ground truth labelled in `scripts/benchmark.py`.",
-        "",
-        "## Headline numbers",
+        intro,
         "",
         "| Metric | Value |",
         "|---|---|",
@@ -192,19 +222,15 @@ def to_markdown(report: Dict[str, object]) -> str:
         "| Detected with the reasoning layer | {} ({:.1%}) |".format(
             totals["detected_with_reasoning"], totals["recall_with_reasoning"]),
         "| **Violations recovered by reasoning alone** | **{}** |".format(totals["reasoning_uplift"]),
-        "| False positives on the compliant plan | {} |".format(totals["false_positives_on_clean_plan"]),
-        "| Total evaluation wall-clock | {} s |".format(totals["wall_clock_s"]),
-        "",
-        "The uplift row is the research claim in one number: those violations "
-        "are visible in framework guidance but are not expressed by any "
-        "hand-written rule, which is exactly the class a static scanner misses.",
-        "",
-        "## Per-plan breakdown",
+        "| False positives on the compliant plan (verdict-affecting) | {} |".format(
+            totals["false_positives_on_clean_plan"]),
+        "| Low-severity advisories on the compliant plan | {} |".format(
+            totals["advisories_on_clean_plan"]),
         "",
         "| Plan | Seeded | Rules only | + Reasoning | Verdict | Time |",
         "|---|---|---|---|---|---|",
     ]
-    for suite in report["suites"]:
+    for suite in data["suites"]:
         lines.append("| `{}` | {} | {} | {} | {} | {} ms |".format(
             suite["plan"], suite["seeded"], suite["detected_rules_only"],
             suite["detected_with_reasoning"], suite["verdict"].upper(),
@@ -212,41 +238,73 @@ def to_markdown(report: Dict[str, object]) -> str:
         ))
     lines.append("")
 
-    lines.append("## What the reasoning layer recovered")
+    lines.append("**Recovered by the reasoning layer:**")
     lines.append("")
-    any_recovered = False
-    for suite in report["suites"]:
-        for issue in suite["recovered_by_reasoning"]:
-            any_recovered = True
-            lines.append("- `{}`: {}".format(suite["plan"], issue))
-    if not any_recovered:
-        lines.append("_No additional violations recovered in this run._")
+    recovered = [(s["plan"], i) for s in data["suites"] for i in s["recovered_by_reasoning"]]
+    for plan, issue in recovered:
+        lines.append("- `{}`: {}".format(plan, issue))
+    if not recovered:
+        lines.append("_None in this run._")
     lines.append("")
 
-    still = [(s["plan"], i) for s in report["suites"] for i in s["still_missed"]]
-    lines.append("## Known gaps (not yet detected)")
+    lines.append("**Known gaps (not yet detected):**")
     lines.append("")
-    if still:
-        lines.append("Reported honestly -- these are the next rules to write:")
-        lines.append("")
-        for plan, issue in still:
-            lines.append("- `{}`: {}".format(plan, issue))
-    else:
+    still = [(s["plan"], i) for s in data["suites"] for i in s["still_missed"]]
+    for plan, issue in still:
+        lines.append("- `{}`: {}".format(plan, issue))
+    if not still:
         lines.append("_All seeded violations are currently detected._")
     lines.append("")
 
-    lines.append("## False positives on the compliant module")
+    lines.append("**Compliant module:**")
     lines.append("")
-    for clean in report["clean"]:
-        lines.append("- `{}`: {} false positive(s), verdict {}".format(
-            clean["plan"], clean["false_positives"], clean["verdict"].upper()))
+    for clean in data["clean"]:
+        lines.append("- `{}`: verdict {}, {} verdict-affecting false positive(s), "
+                     "{} low-severity advisory finding(s)".format(
+                         clean["plan"], clean["verdict"].upper(),
+                         clean["false_positives"], clean["advisories"]))
         for detail in clean["details"]:
             lines.append("  - {}".format(detail))
     lines.append("")
-    lines.append(
-        "A gate that fails clean code gets disabled by the team that owns it, "
-        "so this number matters as much as the detection rate."
+    return lines
+
+
+def to_markdown(report: Dict[str, object]) -> str:
+    lines = [
+        "# Agent SecOps -- Benchmark Results",
+        "",
+        "Ground truth is labelled in `scripts/benchmark.py`. A seeded violation "
+        "counts as detected only when the specific rule or reasoning probe named "
+        "for it fires on the right resource.",
+        "",
+    ]
+    lines += _section(
+        "Hand-written fixtures",
+        "Plans in `examples/plans/`, written by hand to mirror the seeded modules.",
+        report,
     )
+    if "real" in report:
+        lines += _section(
+            "Real terraform plan output",
+            "Plans in `examples/plans/real/`, produced by `terraform plan` + "
+            "`terraform show -json` on the seeded modules in `examples/terraform/` "
+            "and the compliant module in `infra/demo/`. This is the input shape "
+            "the CI pipeline gives the gate.",
+            report["real"],  # type: ignore[arg-type]
+        )
+    lines += [
+        "## Reading these numbers",
+        "",
+        "- The offline reasoning layer is a set of deterministic, hand-written "
+        "probes derived from the framework knowledge base. \"Recovered by "
+        "reasoning\" therefore means \"caught by a framework-intent probe that "
+        "no Layer-1 rule implements\", not \"discovered by a language model\".",
+        "- The seeded modules were written by the same team that wrote the "
+        "rules and probes, so recall on them is an upper bound. An independent "
+        "test set is the obvious next step.",
+        "- Total evaluation wall-clock: {} s.".format(report["totals"]["wall_clock_s"]),
+        "",
+    ]
     return "\n".join(lines)
 
 

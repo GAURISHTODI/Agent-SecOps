@@ -59,8 +59,8 @@ modules and loops resolved) and the last moment stopping is free. Scanning
 |---|---|
 | 1. Parse and normalise | Azure, AWS and GCP resource types become canonical kinds (`object_storage`, `network_firewall`, ...). One rule then works on all three clouds. |
 | 2. Layer 1: rules | 22 deterministic rules, each with a pillar, severity, rationale and ready-made fix. Confidence 1.0. |
-| 3. Layer 2: reasoning | Retrieves the guidance for that resource kind and looks for intent violations no rule covers. Output is verified: it cannot invent resources, cannot repeat rule findings, drops low confidence. Advisory by default. |
-| 4. Layer 3: policy | Severity thresholds, per-rule overrides, waivers that expire. |
+| 3. Layer 2a: organisational customized policies (+ 2b graph) | Retrieves the guidance for that resource kind and looks for intent violations no rule covers. Output is verified: it cannot invent resources, cannot repeat rule findings, drops low confidence. Advisory by default. |
+| 4. Layer 3: thresholds & waivers | Severity thresholds, per-rule overrides, waivers that expire. |
 | 5. Output | Exit code 0/1/2/3 is the decision. Also Markdown (PR comment), JSON, SARIF (GitHub Security tab) and the dashboard. |
 
 ### Reasoning layer algorithm
@@ -78,7 +78,7 @@ modules and loops resolved) and the last moment stopping is free. Scanning
 - A **hybrid gate at a new insertion point**: rules plus reasoning on the resolved plan, before apply. Checkov, tfsec and OPA are rules only.
 - **Retrieval keyed on resource type**, not embeddings: deterministic, auditable, cheap.
 - **Safe use of an unreliable component on a control path** (the four guardrails). This is the engineering contribution.
-- **A measurable ablation**: 37/42 with rules alone, 42/42 with reasoning, 0 false positives.
+- **A measurable ablation**: 33/42 with rules alone, 42/42 with reasoning, 0 false positives, on hand-written and real terraform plans alike.
 - **There is no trained model, by design**: no labelled data exists, and a build gate must be explainable.
 - **Volunteer this:** the 42 labels were written by the same team as the rules, so 100% is a regression result, not independent accuracy. The LLM path is built but not benchmarked.
 
@@ -111,7 +111,7 @@ Keep an Azure portal tab on `secops-dev-cin-rg` open from the start.
 > exercised end to end.
 
 Dashboard URL shortcuts for a clean start:
-`/?plan=team_demo.plan.json`, `/?tab=benchmark`, `/?run=aws_noncompliant`,
+`/?plan=team_demo.plan.json`, `/?tab=benchmark`, 
 `&reasoning=off`, `&theme=light`.
 
 Demo resources used in scripts: `gaurish_s_resourceA` (Azure storage),
@@ -125,7 +125,7 @@ Demo resources used in scripts: `gaurish_s_resourceA` (Azure storage),
 **Done and working**
 - 22 rules, parser, reasoning layer, policy layer, CLI, reports.
 - Dashboard with real Terraform runs and PDF download.
-- 69 passing tests; benchmark 37/42 -> 42/42, 0 false positives.
+- 146 passing tests; benchmark 33/42 -> 42/42, 0 false positives (fixtures and real plans).
 - CI that blocks bad plans; live Azure deployment (about 4 rupees/month).
 - Knowledge audit against Microsoft docs; report and deck.
 
@@ -170,14 +170,21 @@ Demo resources used in scripts: `gaurish_s_resourceA` (Azure storage),
 
 ## 9. Dashboard additions (latest)
 
-- **Presentation pacing** (switch next to "Reasoning layer", on by default). The
-  display steps through Parse -> Layer 1 -> Layer 2 -> Layer 2b -> Layer 3 ->
-  Verdict at about one second each (about 7-8 s in total) so each stage can be
-  explained. The banner says the display is slowed, shows the engine's real time
-  (tens of milliseconds) and reveals each stage's measured time as it completes.
-  Turn it off (or use `?pace=off`) to see the true speed. **Say this out loud:**
-  the algorithm is fast; the pacing is for explanation. Do not claim it is
-  compute time.
+- **Pacing** (switch next to "Reasoning layer", on by default). When you press
+  Run gate, the display steps through Parse -> Layer 1 -> Layer 2a -> Layer 2b ->
+  Layer 3 -> Verdict at about one second each (about 7-8 s in total) so each
+  stage can be explained. The banner says the display is slowed, shows the
+  engine's real time (tens of milliseconds) and reveals each stage's measured
+  time as it completes. Turn it off (or use `?pace=off`) to see the true speed.
+  **Say this out loud:** the algorithm is fast; the pacing is for explanation.
+  Do not claim it is compute time.
+- **Nothing runs until you press a button.** Pick a plan and press **Run gate**;
+  changing the plan or the Reasoning layer switch clears the old result rather
+  than re-running. The Benchmark tab has its own **Run benchmark** button. The
+  default plan is the committed real Azure plan, so the dependency graph has links.
+- **How it works tab.** Current standing, the layers and how each works, where
+  seeded data is used, and the algorithm step by step with a worked example.
+  Opening it evaluates nothing.
 - **Terraform lookup.** The dashboard now finds Terraform even when the terminal's
   PATH is stale (winget, Chocolatey, Program Files), or from `SECOPS_TERRAFORM`.
   If you installed Terraform after opening the terminal, you no longer need to

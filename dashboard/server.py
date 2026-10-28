@@ -53,6 +53,21 @@ PLAN_LABELS = {
     "aws_noncompliant.plan.json": "AWS - seeded misconfigurations",
     "gcp_noncompliant.plan.json": "GCP - seeded misconfigurations",
     "team_demo.plan.json": "Team demo - resourceA (Azure) / B (AWS) / C (GCP)",
+    "aws_mesh.plan.json": "AWS - tangled dependency graph (mesh)",
+    "aws_thousand_cuts.plan.json": "AWS - six small doors, one database (thousand cuts)",
+    "aws_shared_trust.plan.json": "AWS - three teams, one shared key (shared trust)",
+    "aws_risk_spectrum.plan.json": "AWS - every risk level in one graph (risk spectrum)",
+}
+
+# examples/terraform/<dir> -> what the module is, for the "last local run" group.
+MODULE_LABELS = {
+    "noncompliant": "Azure - seeded misconfigurations",
+    "aws_noncompliant": "AWS - seeded misconfigurations",
+    "gcp_noncompliant": "GCP - seeded misconfigurations",
+    "aws_mesh": "AWS - tangled dependency graph (mesh)",
+    "aws_thousand_cuts": "AWS - six small doors, one database (thousand cuts)",
+    "aws_shared_trust": "AWS - three teams, one shared key (shared trust)",
+    "aws_risk_spectrum": "AWS - every risk level in one graph (risk spectrum)",
 }
 
 _CONTENT_TYPES = {
@@ -119,7 +134,7 @@ def _plan_catalog() -> Dict[str, Dict[str, Any]]:
     """Every plan the dashboard may evaluate, keyed by a safe opaque name.
 
     Looking names up here (instead of joining a query parameter onto a path)
-    means a request can never read a file outside these two directories.
+    means a request can never read a file outside these directories.
     """
     catalog: Dict[str, Dict[str, Any]] = {}
     for f in sorted(PLANS.glob("*.plan.json")):
@@ -129,17 +144,67 @@ def _plan_catalog() -> Dict[str, Dict[str, Any]]:
             "group": "Hand-written fixtures",
             "path": f,
         }
+    for f in sorted((PLANS / "real").glob("*.plan.json")):
+        key = "real/{}".format(f.name)
+        catalog[key] = {
+            "file": key,
+            "label": "{} (real terraform show -json)".format(PLAN_LABELS.get(f.name, f.stem)),
+            "group": "Committed real plan output",
+            "path": f,
+        }
     if TF_MODULES.is_dir():
         for d in sorted(TF_MODULES.iterdir()):
             if d.is_dir() and (d / "plan.json").is_file():
                 key = "terraform/{}".format(d.name)
                 catalog[key] = {
                     "file": key,
-                    "label": "Real terraform plan - {}".format(d.name),
-                    "group": "Real terraform plan output",
+                    "label": "{} (your last local run)".format(
+                        MODULE_LABELS.get(d.name, d.name)),
+                    "group": "Generated on this machine by terraform plan -> gate",
                     "path": d / "plan.json",
                 }
     return catalog
+
+
+def _status() -> Dict[str, Any]:
+    """Facts about the agent for the "How it works" tab.
+
+    Read-only: counts what is registered and reads the benchmark result last
+    written to docs/, so opening the tab never evaluates anything.
+    """
+    from agent.reasoner.base import load_kb
+    from agent.reasoner.offline import _PROBES
+
+    rules = all_rules()
+    kb = load_kb()
+    recorded: Dict[str, Any] = {}
+    bench_file = ROOT / "docs" / "benchmark-results.json"
+    if bench_file.is_file():
+        try:
+            data = json.loads(bench_file.read_text(encoding="utf-8"))
+            recorded = {
+                "fixtures": data.get("totals", {}),
+                "real": (data.get("real") or {}).get("totals", {}),
+                "recorded_on": datetime.fromtimestamp(
+                    bench_file.stat().st_mtime, timezone.utc
+                ).date().isoformat(),
+            }
+        except (OSError, ValueError):
+            recorded = {}
+    real_dir = PLANS / "real"
+    return {
+        "rules": len(rules),
+        "caf_rules": sum(1 for r in rules if r.pillar.framework == "CAF"),
+        "waf_rules": sum(1 for r in rules if r.pillar.framework == "WAF"),
+        "pillars": len({r.pillar for r in rules}),
+        "probes": len(_PROBES),
+        "kb_pillars": len(kb.get("pillars") or {}),
+        "kb_sources": len(kb.get("sources") or []),
+        "fixtures": sorted(f.name for f in PLANS.glob("*.plan.json")),
+        "real_plans": sorted(f.name for f in real_dir.glob("*.plan.json")) if real_dir.is_dir() else [],
+        "seeded_modules": _tf_modules(),
+        "benchmark": recorded,
+    }
 
 
 def _find_terraform() -> Optional[str]:
@@ -397,6 +462,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(str(exc))
             digest = hashlib.sha256(entry["path"].read_bytes()).hexdigest()[:16]
             return self._json(_result_payload(plan, reasoner, name, entry["group"], digest))
+
+        if path == "/api/status":
+            return self._json(_status())
 
         if path == "/api/benchmark":
             from scripts.benchmark import evaluate as run_benchmark

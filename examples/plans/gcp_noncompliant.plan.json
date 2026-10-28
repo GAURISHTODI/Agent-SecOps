@@ -15,7 +15,11 @@
           "name": "demo-data-bucket",
           "location": "SOUTHAMERICA-EAST1",
           "storage_class": "STANDARD",
-          "versioning_enabled": false,
+          "versioning": [
+            {
+              "enabled": false
+            }
+          ],
           "public_access_prevention": "inherited",
           "labels": {
             "environment": "prod"
@@ -59,12 +63,20 @@
           "region": "southamerica-east1",
           "database_version": "POSTGRES_15",
           "deletion_protection": false,
-          "backup_retention_days": 0,
           "root_password": "changeme123",
-          "password": "changeme123",
-          "labels": {
-            "environment": "dev"
-          }
+          "settings": [
+            {
+              "tier": "db-f1-micro",
+              "backup_configuration": [
+                {
+                  "enabled": false
+                }
+              ],
+              "user_labels": {
+                "environment": "dev"
+              }
+            }
+          ]
         }
       }
     },

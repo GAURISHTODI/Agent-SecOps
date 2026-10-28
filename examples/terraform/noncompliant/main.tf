@@ -65,6 +65,10 @@ resource "azurerm_storage_account" "data" {
     default_action = "Allow"
   }
 
+  blob_properties {
+    versioning_enabled = false
+  }
+
   tags = {
     dataclass = "archive"
   }
@@ -73,7 +77,6 @@ resource "azurerm_storage_account" "data" {
 # VIOLATIONS:
 #   WAF-SEC-006  administrator_login_password hardcoded
 #   WAF-SEC-002  minimum_tls_version = 1.0
-#   WAF-REL-002  backup_retention_days = 1
 #   CAF-LZ-002   public_network_access_enabled = true
 #   CAF-GOV-001  missing owner/costcenter
 resource "azurerm_mssql_server" "db" {
@@ -90,6 +93,24 @@ resource "azurerm_mssql_server" "db" {
 
   tags = {
     environment = "prod"
+  }
+}
+
+# VIOLATION: WAF-REL-002 -- 1-day point-in-time restore window. Azure SQL
+# keeps backup retention on the database, not on the server.
+resource "azurerm_mssql_database" "db" {
+  name      = "demo-sql-db"
+  server_id = azurerm_mssql_server.db.id
+  sku_name  = "Basic"
+
+  short_term_retention_policy {
+    retention_days = 1
+  }
+
+  tags = {
+    environment = "prod"
+    owner       = "team-a"
+    costcenter  = "CC-1042"
   }
 }
 

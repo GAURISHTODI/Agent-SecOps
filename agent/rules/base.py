@@ -105,8 +105,12 @@ def truthy(value: object) -> bool:
 
 
 def is_open_cidr(cidr: object) -> bool:
-    """True for any CIDR that means 'the entire internet'."""
-    return str(cidr) in ("0.0.0.0/0", "::/0", "*", "internet", "any")
+    """True for any CIDR that means 'the entire internet'.
+
+    Azure service tags are case-insensitive and usually written "Internet"
+    or "Any", so the comparison is too.
+    """
+    return str(cidr).strip().lower() in ("0.0.0.0/0", "::/0", "*", "internet", "any")
 
 
 def missing_tags(resource: Resource, required: Iterable[str]) -> List[str]:

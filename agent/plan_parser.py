@@ -10,8 +10,9 @@ what lets the gate execute on a free GitHub-hosted runner in seconds.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from .models import Action, Kind, PlanSummary, Provider, Resource
 
@@ -31,7 +32,6 @@ _PROVIDER_PREFIX = {
 _KIND_MAP: Dict[str, Kind] = {
     # object storage
     "azurerm_storage_account": Kind.OBJECT_STORAGE,
-    "azurerm_storage_container": Kind.OBJECT_STORAGE,
     "aws_s3_bucket": Kind.OBJECT_STORAGE,
     "google_storage_bucket": Kind.OBJECT_STORAGE,
     # compute
@@ -92,6 +92,9 @@ _KIND_MAP: Dict[str, Kind] = {
     # its own: it has no tags, name convention or SKU to govern. It still
     # matters to the engine, which reads it to satisfy WAF-OPS-001.
     "azurerm_monitor_diagnostic_setting": Kind.OTHER,
+    # Likewise a storage container has no tags, region or logs of its own;
+    # the engine folds its access level onto the parent storage account.
+    "azurerm_storage_container": Kind.OTHER,
     # app hosting
     "azurerm_linux_web_app": Kind.APP_HOSTING,
     "azurerm_windows_web_app": Kind.APP_HOSTING,
@@ -122,6 +125,11 @@ def classify(resource_type: str) -> Kind:
     if resource_type in _KIND_MAP:
         return _KIND_MAP[resource_type]
     t = resource_type.lower()
+    # AWS provider v4+ splits a bucket's ACL, versioning, encryption and so on
+    # into separate resources. They are settings of the bucket, not buckets,
+    # so the engine folds them onto their parent instead.
+    if t.startswith("aws_s3_bucket_"):
+        return Kind.OTHER
     # Firewall/ACL objects are matched first: "mssql_firewall_rule" contains
     # "sql", so a database check ahead of this would misclassify it.
     if "security_group" in t or "firewall" in t or "security_rule" in t:
@@ -190,9 +198,14 @@ def _provider_regions(data: Dict[str, Any]) -> Dict[str, str]:
 
 
 # Providers whose resources inherit the provider-level region, and the
-# resource-type prefixes that are global despite that (IAM has no region).
+# resource-type prefixes that are global despite that (IAM has no region),
+# or that are settings of a parent resource rather than placed resources.
 _REGIONAL_PROVIDERS = {"aws": "aws_", "google": "google_"}
-_GLOBAL_PREFIXES = ("aws_iam_", "google_project_iam", "google_service_account")
+_GLOBAL_PREFIXES = (
+    "aws_iam_", "aws_route53_", "aws_cloudfront_", "aws_s3_bucket_",
+    "google_project_iam", "google_service_account", "google_compute_firewall",
+    "google_compute_network", "google_compute_global_",
+)
 
 
 def _inherit_region(rtype: str, after: Dict[str, Any], regions: Dict[str, str]) -> None:
@@ -218,33 +231,94 @@ def _collect_references(node: Any, out: List[str]) -> None:
             _collect_references(value, out)
 
 
-def _dependency_edges(data: Dict[str, Any], known: set) -> Dict[str, List[str]]:
-    """Resource -> resources it references, from `configuration.root_module`.
+_INDEX = re.compile(r"\[[^\]]*\]$")
 
-    A reference such as ``azurerm_subnet.app.id`` is reduced to the address
-    ``azurerm_subnet.app``; anything that is not a resource in this plan
-    (variables, data sources, locals) is ignored.
+
+def _resolve(ref: str, prefix: str, inputs: Dict[str, List[str]]) -> List[str]:
+    """Turn a reference made inside a module into plan-wide references.
+
+    ``var.sg_id`` inside ``module.web`` means whatever the parent passed in as
+    ``sg_id``; anything else is local to the module and gets its prefix.
+    """
+    if ref.startswith("var."):
+        return inputs.get(ref.split(".")[1], [])
+    return [prefix + ref]
+
+
+ModuleInputs = Dict[str, List[str]]
+
+
+def _config_resources(
+    module: Dict[str, Any], prefix: str = "", inputs: Optional[ModuleInputs] = None
+) -> List[Tuple[str, ModuleInputs, Dict[str, Any]]]:
+    """(module prefix, module inputs, resource config) for every module.
+
+    Module inputs map each variable of a child module to the plan-wide
+    references the parent passed into it, so a resource handed to a module
+    stays connected to what the module builds from it.
+    """
+    inputs = inputs or {}
+    found = [(prefix, inputs, res) for res in module.get("resources", []) or []]
+    for name, call in (module.get("module_calls") or {}).items():
+        child_inputs: ModuleInputs = {}
+        for var, expr in ((call or {}).get("expressions") or {}).items():
+            refs: List[str] = []
+            _collect_references(expr, refs)
+            child_inputs[var] = [r for ref in refs for r in _resolve(ref, prefix, inputs)]
+        child = (call or {}).get("module") or {}
+        found.extend(
+            _config_resources(child, "{}module.{}.".format(prefix, name), child_inputs)
+        )
+    return found
+
+
+def _configuration_facts(
+    data: Dict[str, Any], known: Set[str]
+) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+    """Dependency edges and referenced attributes from the `configuration` block.
+
+    Edges map a resource to the resources it references; a reference such as
+    ``azurerm_subnet.app.id`` is reduced to ``azurerm_subnet.app``, and
+    anything that is not a resource in this plan (variables, data sources,
+    locals) is ignored. Configuration addresses carry no ``count`` /
+    ``for_each`` index, so each one is expanded to every planned instance.
     """
     module = (data.get("configuration") or {}).get("root_module") or {}
+    instances: Dict[str, List[str]] = {}
+    for address in known:
+        instances.setdefault(_INDEX.sub("", address), []).append(address)
+
     edges: Dict[str, List[str]] = {}
-    for res in module.get("resources", []) or []:
-        address = res.get("address")
-        if address not in known:
+    referenced: Dict[str, List[str]] = {}
+    for prefix, inputs, res in _config_resources(module):
+        base = prefix + str(res.get("address", ""))
+        owners = instances.get(base)
+        if not owners:
             continue
+        expressions = res.get("expressions", {}) or {}
         refs: List[str] = []
-        _collect_references(res.get("expressions", {}), refs)
+        _collect_references(expressions, refs)
         refs.extend(str(d) for d in res.get("depends_on", []) or [])
-        targets = []
-        for ref in refs:
+        targets: List[str] = []
+        for ref in (r for raw in refs for r in _resolve(raw, prefix, inputs)):
             parts = ref.split(".")
-            for end in (2, 4):  # "type.name", or "module.m.type.name"
-                cand = ".".join(parts[:end])
-                if cand in known and cand != address and cand not in targets:
-                    targets.append(cand)
+            for end in range(2, len(parts) + 1):
+                cand = _INDEX.sub("", ".".join(parts[:end]))
+                if cand in instances and cand != base:
+                    for inst in instances[cand]:
+                        if inst not in targets:
+                            targets.append(inst)
                     break
-        if targets:
-            edges[address] = targets
-    return edges
+        attrs = sorted(
+            key for key, expr in expressions.items()
+            if isinstance(expr, dict) and expr.get("references")
+        )
+        for owner in owners:
+            if targets:
+                edges[owner] = list(targets)
+            if attrs:
+                referenced[owner] = attrs
+    return edges, referenced
 
 
 def parse_plan(data: Dict[str, Any]) -> PlanSummary:
@@ -286,12 +360,16 @@ def parse_plan(data: Dict[str, Any]) -> PlanSummary:
             )
         )
 
+    edges, referenced = _configuration_facts(data, {r.address for r in resources})
+    for resource in resources:
+        resource.referenced_attrs = referenced.get(resource.address, [])
+
     return PlanSummary(
         resources=resources,
         terraform_version=data.get("terraform_version", "unknown"),
         format_version=data.get("format_version", "unknown"),
         providers=providers,
-        edges=_dependency_edges(data, {r.address for r in resources}),
+        edges=edges,
     )
 
 
