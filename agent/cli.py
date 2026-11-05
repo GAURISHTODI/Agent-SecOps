@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from .advisor import Advisor
 from .config import load_policy
 from .engine import evaluate_plan
 from .models import Verdict
@@ -73,7 +74,8 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     if args.no_reasoner:
         policy.reasoner.enabled = False
 
-    result = evaluate_plan(plan, policy)
+    advisor = Advisor(model=args.advisor_model) if args.advisor == "ollama" else None
+    result = evaluate_plan(plan, policy, advisor=advisor)
 
     markdown = render_markdown(result)
     _write(args.markdown, markdown)
@@ -151,6 +153,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["offline", "azure_openai", "anthropic", "none"],
         help="Override the reasoning layer from policy.",
     )
+    ev.add_argument(
+        "--advisor", choices=["ollama"],
+        help="Add Layer 4: a local Ollama model explains findings (never changes the verdict).",
+    )
+    ev.add_argument("--advisor-model", default="qwen2.5:3b", help="Ollama model name.")
     ev.add_argument(
         "--no-reasoner", action="store_true", help="Run deterministic rules only."
     )

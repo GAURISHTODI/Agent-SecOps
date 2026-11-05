@@ -1,15 +1,15 @@
 # Agent SecOps
 
-**An AI-driven SecOps agent that gates Terraform deployments against Azure CAF and WAF before they reach the cloud.**
+**An AI-assisted SecOps agent that gates Terraform deployments against Azure CAF and WAF before they reach the cloud.**
 
 Project ID 19727UG01 · BCSE497J Project-1 · VIT
-Team: Akshat Gupta, Gaurish Todi, Bhumika Singh · Guide: Dr. SM Farooq
+Author: Gaurish Todi · Guide: Dr. SM Farooq
 
 ---
 
 ## The one-sentence version
 
-An AI agent sits between `terraform plan` and `terraform apply` in a GitHub Actions pipeline, reads the plan JSON, judges every proposed resource against Cloud Adoption Framework governance and Well-Architected Framework pillars, and returns **pass / remediate / block** with a plain-language report — so a non-compliant resource is stopped before it exists, and before it costs anything.
+A SecOps agent sits between `terraform plan` and `terraform apply` in a GitHub Actions pipeline, reads the plan JSON, judges every proposed resource against Cloud Adoption Framework governance and Well-Architected Framework pillars, and returns **pass / remediate / block** with a plain-language report — so a non-compliant resource is stopped before it exists, and before it costs anything.
 
 ```
 Developer → GitHub Actions → terraform plan → plan.json
@@ -48,7 +48,7 @@ counts as detected when the specific rule or probe labelled for it fires:
 | Gate latency | < 15 ms |
 
 The offline reasoning layer is a set of hand-written probes derived from the
-framework knowledge base, and the seeded modules were written by the same team,
+framework knowledge base, and the seeded modules were written by the same author,
 so treat recall as an upper bound rather than a field measurement.
 
 ## Quick start — 60 seconds, no cloud account needed
@@ -89,9 +89,128 @@ Other commands:
 ```bash
 python -m agent.cli rules                  # the 22-rule catalogue
 python -m agent.cli explain WAF-SEC-004    # why a rule exists, in framework terms
-python -m pytest tests/ -q                 # 146 tests
+python -m pytest tests/ -q                 # 151 tests
 python scripts/benchmark.py                # detection + false-positive numbers
 ```
+
+## Demonstration — step by step
+
+All screenshots live in [`docs/screenshots/`](docs/screenshots/). The walkthrough
+follows one real run: a Terraform plan goes in, a verdict and an exit code come out.
+
+### Step 1 — Choose a plan and set the controls
+
+Pick a bundled plan (or upload / paste your own `terraform show -json` output),
+decide whether the reasoning layer is on, and optionally run the real
+`terraform plan → gate` pipeline.
+
+![Controls and input](docs/screenshots/final/01_controls_input.png)
+
+### Step 2 — Run the real pipeline
+
+The dashboard drives the actual Terraform CLI (`init`, `plan`, `show -json`) and
+then the gate. The timings are measured, not animated.
+
+![Pipeline trace](docs/screenshots/final/02_pipeline_trace.png)
+
+### Step 3 — The plan is normalised into resources
+
+Every provider resource is mapped to a cloud-agnostic kind, so one rule covers
+Azure, AWS and GCP.
+
+![Resources parsed from the plan](docs/screenshots/final/03_step0_resources.png)
+
+### Step 4 — Layers produce findings
+
+Deterministic rules, organisational policy, reasoning probes and the dependency
+graph each contribute findings. Every finding names the CAF/WAF pillar it
+violates and carries a copy-pasteable fix.
+
+![Layers and findings](docs/screenshots/final/04_layers_findings.png)
+
+### Step 5 — Dependency-graph risk propagation
+
+The graph reasoner connects resources to each other, so an exposed path that
+reaches a weak resource becomes one compound-risk finding.
+
+![Dependency graph](docs/screenshots/final/05_dependency_graph.png)
+
+![Graph reasoning demo](docs/screenshots/dash_graph_demo.png)
+
+### Step 6 — The verdict and the exit code
+
+Thresholds and waivers from `policies/policy.yaml` turn the findings into
+`pass`, `remediate` or `block`, and the exit code is what stops
+`terraform apply`.
+
+| Compliant plan → `pass`, exit 0 | Non-compliant plan → `block`, exit 2 |
+|---|---|
+| ![Compliant pass](docs/screenshots/dash_compliant_pass.png) | ![Terraform AWS block](docs/screenshots/dash_terraform_aws.png) |
+
+### Step 7 — Show what the reasoning layer adds
+
+Switch the reasoning layer off and the findings that no hand-written rule
+produces disappear.
+
+![Reasoning layer off](docs/screenshots/dash_reasoning_off.png)
+
+### Step 8 — Export the report
+
+The same result downloads as PDF, JSON, Markdown or SARIF.
+
+| PDF report | JSON report |
+|---|---|
+| ![PDF report](docs/screenshots/final/06_pdf_report.png) | ![JSON report](docs/screenshots/final/07_json_report.png) |
+
+### Step 9 — Benchmark and rule catalogue
+
+Detection and false-positive numbers are computed live, and the Rules tab lists
+all 22 rules.
+
+| Benchmark | Rules |
+|---|---|
+| ![Benchmark](docs/screenshots/dash_benchmark.png) | ![Rules](docs/screenshots/dash_rules.png) |
+
+### Step 10 — Team scenario
+
+A larger multi-resource plan showing how findings group by resource and severity.
+
+![Team demo](docs/screenshots/dash_team_demo.png)
+
+### Step 11 — In CI/CD on GitHub Actions
+
+The gate runs as a pipeline step. A block stops the job, and a gated deployment
+asks for approval before anything is applied.
+
+| Workflow run | Approval gate |
+|---|---|
+| ![GitHub Actions run](docs/screenshots/github_actions_run7.png) | ![Approve dialog](docs/screenshots/github_approve_dialog.png) |
+
+### Step 12 — Cloud proof and cost control
+
+The Azure resource groups used for the real deployment test, kept to a minimum
+to protect student credits (see [Cost discipline](#cost-discipline)).
+
+![Azure resource groups](docs/screenshots/azure_resource_groups.png)
+
+## Layer 4 — local LLM advisor (Ollama, optional)
+
+```bash
+ollama pull qwen2.5:3b
+python -m agent.cli evaluate --plan examples/plans/azure_noncompliant.plan.json --advisor ollama
+python scripts/eval_advisor.py          # tiny eval over the seeded plans
+```
+
+A local model explains each top finding in plain language and suggests a fix.
+**It never decides.** The verdict and exit code come from Layers 1-3 and are fixed
+before the model is called. Guardrails: redacted prompt, JSON-only output with
+length limits, advice naming a resource that is not in the plan is dropped, and any
+Ollama error or timeout leaves the result untouched. Covered by `tests/test_advisor.py`.
+
+Measured with `qwen2.5:3b` on CPU: 15/15 advice items passed the guardrails across
+the three seeded plans, about 5-8 s per finding. Guardrails check *form and grounding*,
+not correctness, and a 3B model sometimes suggests a weak fix, which is why it is
+advisory only.
 
 ## Exit codes — these *are* the gate
 
@@ -145,7 +264,7 @@ examples/plans/            hand-written plan fixtures: Azure ×2, AWS, GCP
   real/                    real `terraform show -json` output of the same modules
 .github/workflows/         the pipeline the gate lives in
 scripts/                   Azure bootstrap, cost watchdog, teardown, benchmark
-docs/                      architecture, Azure setup, cost control, team split
+docs/                      architecture, Azure setup, cost control
 tests/                     146 tests
 ```
 
@@ -181,7 +300,6 @@ Details and the full cost table: **[docs/cost-control.md](docs/cost-control.md)*
 | [docs/architecture.md](docs/architecture.md) | How the agent works, layer by layer, with design rationale |
 | [docs/azure-setup.md](docs/azure-setup.md) | Connecting Azure, OIDC, GitHub configuration |
 | [docs/cost-control.md](docs/cost-control.md) | Every cost decision and the guardrails |
-| [docs/team-split.md](docs/team-split.md) | Three-way ownership split and what each person presents |
 | [docs/benchmark-results.md](docs/benchmark-results.md) | Detection rates and false positives |
 
 ## Status

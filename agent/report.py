@@ -115,6 +115,8 @@ def render_markdown(result: GateResult) -> str:
             )
             lines.append("  - {}".format(f.explanation))
             lines.append("  - _Fix:_ {}".format(f.remediation))
+            if f.ai_advice:
+                lines.append("  - _AI advisor (local LLM):_ {}".format(f.ai_advice))
             if f.terraform_fix:
                 lines.append("")
                 lines.append("    ```hcl")
@@ -252,4 +254,6 @@ def render_console(result: GateResult) -> str:
             )
         )
         lines.append("             {}".format(f.explanation))
+        if f.ai_advice:
+            lines.append("             AI advice: {}".format(f.ai_advice))
     return "\n".join(lines)

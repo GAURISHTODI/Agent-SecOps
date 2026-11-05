@@ -171,6 +171,7 @@ class Finding:
     terraform_fix: Optional[str] = None
     waived: bool = False
     waiver_reason: Optional[str] = None
+    ai_advice: Optional[str] = None   # Layer 4 (Ollama); never affects the verdict
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -187,6 +188,7 @@ class Finding:
             "terraform_fix": self.terraform_fix,
             "waived": self.waived,
             "waiver_reason": self.waiver_reason,
+            "ai_advice": self.ai_advice,
         }
 
 

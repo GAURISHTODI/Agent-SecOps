@@ -7,6 +7,7 @@ Pipeline position:
                                        +-- Layer 1: deterministic CAF/WAF rules
                                        +-- Layer 2: reasoning over framework intent
                                        +-- Layer 3: policy (thresholds + waivers)
+                                       +-- Layer 4: optional Ollama advisor (explains; never decides)
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from typing import Dict, List, Optional
 from .config import Policy, load_policy
 from .models import Finding, GateResult, PlanSummary, Resource, Verdict
 from .plan_parser import load_plan
+from .advisor import Advisor
 from .reasoner import build_reasoner
 from .reasoner.graph import GraphReasoner
 from .rules.base import Rule, all_rules
@@ -147,6 +149,7 @@ def _configured_rules(policy: Policy) -> List[Rule]:
 def evaluate_plan(
     plan: PlanSummary,
     policy: Optional[Policy] = None,
+    advisor: Optional["Advisor"] = None,
 ) -> GateResult:
     started = time.time()
     policy = policy or load_policy()
@@ -236,7 +239,7 @@ def evaluate_plan(
     if hasattr(reasoner, "stats"):
         stats.update(reasoner.stats())  # type: ignore[attr-defined]
 
-    return GateResult(
+    result = GateResult(
         verdict=verdict,
         findings=findings,
         plan=plan,
@@ -244,6 +247,12 @@ def evaluate_plan(
         duration_ms=int((time.time() - started) * 1000),
         stats=stats,
     )
+
+    # ---- Layer 4: local-LLM advisor (opt-in, after the verdict) -----
+    # duration_ms above is the gate latency; the advisor reports its own time.
+    if advisor is not None:
+        advisor.annotate(result)
+    return result
 
 
 def evaluate_file(plan_path: str, policy_path: Optional[str] = None) -> GateResult:
