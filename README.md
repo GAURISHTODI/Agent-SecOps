@@ -2,8 +2,6 @@
 
 **An AI-assisted SecOps agent that gates Terraform deployments against Azure CAF and WAF before they reach the cloud.**
 
-Project ID 19727UG01 · BCSE497J Project-1 · VIT
-Author: Gaurish Todi · Guide: Dr. SM Farooq
 
 ---
 
@@ -11,23 +9,29 @@ Author: Gaurish Todi · Guide: Dr. SM Farooq
 
 A SecOps agent sits between `terraform plan` and `terraform apply` in a GitHub Actions pipeline, reads the plan JSON, judges every proposed resource against Cloud Adoption Framework governance and Well-Architected Framework pillars, and returns **pass / remediate / block** with a plain-language report — so a non-compliant resource is stopped before it exists, and before it costs anything.
 
+```mermaid
+flowchart TD
+    A["Developer opens a PR"] --> B["GitHub Actions: terraform plan → plan.json"]
+    B --> L1
+    subgraph GATE["AGENT SECOPS GATE"]
+        direction TB
+        L1["<b>Layer 1 · Deterministic rules</b><br/>22 CAF/WAF rules catch known violations, one resource at a time"]
+        L2["<b>Layer 2 · Reasoning</b><br/>Framework probes + dependency-graph risk catch what no rule covers"]
+        L3["<b>Layer 3 · Policy</b><br/>Org thresholds and expiring waivers turn findings into the verdict"]
+        L4["<b>Layer 4 · Local LLM advisor (optional)</b><br/>Ollama explains findings and suggests fixes, never decides"]
+        L1 --> L2 --> L3 --> L4
+    end
+    L3 -->|"exit 0 · PASS"| P["terraform apply → Azure / AWS / GCP"]
+    L3 -->|"exit 1 · REMEDIATE"| W["Warn on the PR"]
+    L3 -->|"exit 2 · BLOCK"| X["Report on the PR, nothing deployed"]
 ```
-Developer → GitHub Actions → terraform plan → plan.json
-                                                  │
-                                    ┌─────────────▼─────────────┐
-                                    │   AGENT SECOPS GATE       │
-                                    │  Layer 1: CAF/WAF rules   │
-                                    │  Layer 2a: organisational │
-                                    │   customized policies     │
-                                    │  Layer 2b: graph risk     │
-                                    │  Layer 3: thresholds &    │
-                                    │           waivers         │
-                                    └─────────────┬─────────────┘
-                                     BLOCK ◄──────┴──────► PASS
-                                       │                     │
-                              report on the PR        terraform apply
-                              nothing deployed      → Azure / AWS / GCP
-```
+
+| Layer | What it does, in one line | Decides the verdict? |
+|---|---|---|
+| **1 · Rules** | 22 deterministic CAF/WAF checks that flag known misconfigurations. | Yes, via Layer 3 |
+| **2 · Reasoning** | Hand-written framework probes plus graph risk propagation find combined and unwritten risks. | Advisory by default |
+| **3 · Policy** | `policies/policy.yaml` sets block/warn thresholds and expiring waivers, then returns pass / remediate / block. | **Yes, the only place** |
+| **4 · LLM advisor** | A local Ollama model explains each top finding in plain language, after the verdict is fixed. | No, never |
 
 ## Why this is not just another Checkov
 
